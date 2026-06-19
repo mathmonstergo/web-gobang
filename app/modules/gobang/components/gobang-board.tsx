@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
 
 import {
   BOARD_GRID_MAX,
@@ -28,6 +28,12 @@ type LineEndpoints = {
   end: Position;
 };
 
+type PatternTiming = {
+  drawPerSegmentMs: number;
+  holdMs: number;
+  erasePerSegmentMs: number;
+};
+
 const STAR_POINTS: readonly Position[] = [
   { row: 3, col: 3 },
   { row: 3, col: 11 },
@@ -42,6 +48,7 @@ export function GobangBoard({
   onPlace
 }: GobangBoardProps): ReactElement {
   const [cursor, setCursor] = useState<Position>({ row: 7, col: 7 });
+  const isReducedMotion: boolean = usePrefersReducedMotion();
   const winningKeys: ReadonlySet<string> = useMemo(() => {
     if (effects.victory === null) {
       return new Set<string>();
@@ -188,7 +195,11 @@ export function GobangBoard({
           ))}
 
           {effects.shapeHints.map((hint: ShapeHint) => (
-            <ShapeHintLine hint={hint} key={hint.id} />
+            <ShapeHintLine
+              hint={hint}
+              isReducedMotion={isReducedMotion}
+              key={`${effects.placement?.id ?? "placement"}-${hint.id}`}
+            />
           ))}
 
           {effects.victory !== null ? (
@@ -227,24 +238,60 @@ export function GobangBoard({
   );
 }
 
-function ShapeHintLine({ hint }: { hint: ShapeHint }): ReactElement | null {
-  const endpoints: LineEndpoints | null = getLineEndpoints(hint.positions);
-
-  if (endpoints === null) {
+function ShapeHintLine({
+  hint,
+  isReducedMotion
+}: {
+  hint: ShapeHint;
+  isReducedMotion: boolean;
+}): ReactElement | null {
+  if (hint.positions.length < 2) {
     return null;
   }
 
+  const timing: PatternTiming = isReducedMotion
+    ? { drawPerSegmentMs: 40, holdMs: 120, erasePerSegmentMs: 40 }
+    : { drawPerSegmentMs: 170, holdMs: 500, erasePerSegmentMs: 145 };
+  const segmentCount: number = hint.positions.length - 1;
+  const connectDurationMs: number = segmentCount * timing.drawPerSegmentMs;
+  const eraseDurationMs: number = segmentCount * timing.erasePerSegmentMs;
+  const eraseBeginMs: number = connectDurationMs + timing.holdMs;
+  const points: string = hint.positions
+    .map((position: Position) => `${position.col},${position.row}`)
+    .join(" ");
+
   return (
-    <line
+    <g
       className={[
-        "shape-hint-line",
+        "shape-hint",
         hint.player === "black" ? "shape-hint-black" : "shape-hint-white"
       ].join(" ")}
-      x1={endpoints.start.col}
-      x2={endpoints.end.col}
-      y1={endpoints.start.row}
-      y2={endpoints.end.row}
-    />
+    >
+      <polyline
+        className="shape-hint-segment"
+        pathLength={1}
+        points={points}
+        strokeDasharray="1 1"
+        strokeDashoffset={1}
+      >
+        <animate
+          attributeName="stroke-dashoffset"
+          begin="0ms"
+          dur={`${connectDurationMs}ms`}
+          fill="freeze"
+          from="1"
+          to="0"
+        />
+        <animate
+          attributeName="stroke-dashoffset"
+          begin={`${eraseBeginMs}ms`}
+          dur={`${eraseDurationMs}ms`}
+          fill="freeze"
+          from="0"
+          to="-1"
+        />
+      </polyline>
+    </g>
   );
 }
 
@@ -278,4 +325,28 @@ function getLineEndpoints(
   }
 
   return { start, end };
+}
+
+function usePrefersReducedMotion(): boolean {
+  const [isReducedMotion, setIsReducedMotion] = useState(false);
+
+  useEffect(() => {
+    const query: MediaQueryList = window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    );
+
+    setIsReducedMotion(query.matches);
+
+    const handleChange = (event: MediaQueryListEvent): void => {
+      setIsReducedMotion(event.matches);
+    };
+
+    query.addEventListener("change", handleChange);
+
+    return () => {
+      query.removeEventListener("change", handleChange);
+    };
+  }, []);
+
+  return isReducedMotion;
 }

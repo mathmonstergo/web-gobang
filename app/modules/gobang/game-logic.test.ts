@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createInitialState,
   createStateFromMoves,
-  detectConnectedThrees,
+  detectLinePatterns,
   placeStone,
   undoMove
 } from "@/modules/gobang/game-logic";
@@ -124,7 +124,7 @@ describe("Gobang game logic", () => {
     expect(undoneState.moves).toHaveLength(1);
   });
 
-  it("detects exactly connected three groups", () => {
+  it("detects line patterns of three, four, and five stones", () => {
     const state: GameState = createStateFromMoves([
       blackMove(7, 7, 1),
       whiteMove(1, 1, 2),
@@ -132,17 +132,52 @@ describe("Gobang game logic", () => {
       whiteMove(2, 1, 4),
       blackMove(7, 9, 5)
     ]);
-    const hints = detectConnectedThrees(state.board);
+    const threeHints = detectLinePatterns(state.board, { row: 7, col: 9 });
+    const fourState: GameState = createStateFromMoves([
+      ...state.moves,
+      whiteMove(3, 1, 6),
+      blackMove(7, 10, 7)
+    ]);
+    const fourHints = detectLinePatterns(fourState.board, { row: 7, col: 10 });
+    const fiveState: GameState = createStateFromMoves([
+      ...fourState.moves,
+      whiteMove(4, 1, 8),
+      blackMove(7, 11, 9)
+    ]);
+    const fiveHints = detectLinePatterns(fiveState.board, { row: 7, col: 11 });
 
-    expect(hints).toHaveLength(1);
-    expect(hints[0]?.positions).toEqual([
+    expect(threeHints).toHaveLength(1);
+    expect(threeHints[0]?.positions).toEqual([
       { row: 7, col: 7 },
       { row: 7, col: 8 },
       { row: 7, col: 9 }
     ]);
+    expect(fourHints[0]?.positions).toHaveLength(4);
+    expect(fiveHints[0]?.positions).toHaveLength(5);
   });
 
-  it("prioritizes victory over shape hints", () => {
+  it("does not detect shorter lines or unrelated latest placements", () => {
+    const state: GameState = createStateFromMoves([
+      blackMove(7, 7, 1),
+      whiteMove(1, 1, 2),
+      blackMove(7, 8, 3)
+    ]);
+    const unrelatedState: GameState = createStateFromMoves([
+      blackMove(7, 7, 1),
+      whiteMove(1, 1, 2),
+      blackMove(7, 8, 3),
+      whiteMove(2, 1, 4),
+      blackMove(7, 9, 5),
+      whiteMove(10, 10, 6)
+    ]);
+
+    expect(detectLinePatterns(state.board, { row: 7, col: 8 })).toHaveLength(0);
+    expect(
+      detectLinePatterns(unrelatedState.board, { row: 10, col: 10 })
+    ).toHaveLength(0);
+  });
+
+  it("keeps victory visible while allowing the final pattern effect", () => {
     const state: GameState = createStateFromMoves([
       blackMove(7, 3, 1),
       whiteMove(0, 0, 2),
@@ -154,10 +189,15 @@ describe("Gobang game logic", () => {
       whiteMove(0, 3, 8),
       blackMove(7, 7, 9)
     ]);
-    const effects = deriveEffects(state, null);
+    const effects = deriveEffects(state, {
+      id: "9-black-7-7",
+      player: "black",
+      position: { row: 7, col: 7 },
+      turn: 9
+    });
 
     expect(effects.victory?.positions).toHaveLength(5);
-    expect(effects.shapeHints).toHaveLength(0);
+    expect(effects.shapeHints[0]?.positions).toHaveLength(5);
   });
 });
 

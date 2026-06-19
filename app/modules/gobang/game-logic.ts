@@ -160,7 +160,10 @@ export function detectWin(board: Board, move: Move): WinLine | null {
   return null;
 }
 
-export function detectConnectedThrees(board: Board): readonly ShapeHint[] {
+export function detectLinePatterns(
+  board: Board,
+  anchor: Position | null = null
+): readonly ShapeHint[] {
   const hints: ShapeHint[] = [];
 
   for (let row = 0; row < BOARD_SIZE; row += 1) {
@@ -192,9 +195,18 @@ export function detectConnectedThrees(board: Board): readonly ShapeHint[] {
           };
         }
 
-        if (positions.length === 3) {
+        const shouldInclude: boolean =
+          positions.length >= 3 &&
+          positions.length <= WIN_LENGTH &&
+          (anchor === null ||
+            positions.some(
+              (position: Position) =>
+                position.row === anchor.row && position.col === anchor.col
+            ));
+
+        if (shouldInclude) {
           hints.push({
-            id: `${player}-${direction.name}-${row}-${col}`,
+            id: `${player}-${direction.name}-${positions.length}-${row}-${col}`,
             player,
             positions,
             direction: direction.name
