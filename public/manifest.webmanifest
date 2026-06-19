@@ -1,0 +1,18 @@
+{
+  "name": "Web Gobang",
+  "short_name": "Gobang",
+  "description": "A mobile-first offline Gobang game.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fbf6e9",
+  "theme_color": "#1f4738",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
