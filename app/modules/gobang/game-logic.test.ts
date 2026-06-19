@@ -147,6 +147,7 @@ describe("Gobang game logic", () => {
     const fiveHints = detectLinePatterns(fiveState.board, { row: 7, col: 11 });
 
     expect(threeHints).toHaveLength(1);
+    expect(threeHints[0]?.anchor).toEqual({ row: 7, col: 9 });
     expect(threeHints[0]?.positions).toEqual([
       { row: 7, col: 7 },
       { row: 7, col: 8 },

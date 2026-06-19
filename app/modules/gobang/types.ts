@@ -1,5 +1,7 @@
 export const BOARD_SIZE = 15;
 export const WIN_LENGTH = 5;
+export const WAVE_DELAY_PER_STEP_MS = 220;
+export const WAVE_DURATION_MS = 720;
 
 export type Player = "black" | "white";
 
@@ -30,8 +32,22 @@ export type WinLine = {
 export type ShapeHint = {
   id: string;
   player: Player;
+  anchor: Position;
   positions: readonly Position[];
   direction: Direction["name"];
+};
+
+export type WaveHighlight = {
+  player: Player;
+  position: Position;
+  steps: number;
+  delayMs: number;
+};
+
+export type WaveBurst = {
+  id: string;
+  highlights: readonly WaveHighlight[];
+  startedAt: number;
 };
 
 export type GameStatus = "playing" | "won";

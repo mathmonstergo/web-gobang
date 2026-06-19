@@ -208,6 +208,7 @@ export function detectLinePatterns(
           hints.push({
             id: `${player}-${direction.name}-${positions.length}-${row}-${col}`,
             player,
+            anchor: anchor ?? { row, col },
             positions,
             direction: direction.name
           });

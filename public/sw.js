@@ -1,4 +1,4 @@
-const CACHE_NAME = "web-gobang-v1";
+const CACHE_NAME = "web-gobang-v2";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg", "/favicon.svg"];
 
 self.addEventListener("install", (event) => {
