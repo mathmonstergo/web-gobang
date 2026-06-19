@@ -158,6 +158,37 @@ modules/{feature}/
 
 This project uses **React Router v7 with explicit route configuration** (not filesystem-based routing). All routes must be registered in `app/routes.ts`.
 
+### Single-Screen Static App Exception
+
+For a one-screen static MVP with no navigation, no loaders/actions, and no API
+integration, a plain Vite React entry at `app/main.tsx` may be used without
+React Router.
+
+This exception must stay narrow:
+
+- The task design must state that the app is single-screen and static.
+- Feature logic should still live under `app/modules/{feature}/`.
+- Shared hooks should still live under `app/hooks/` when they are not
+  feature-specific.
+- Add React Router v7 and `app/routes.ts` before introducing multiple screens,
+  nested layouts, URL state, loaders/actions, auth screens, or online/API-backed
+  routes.
+
+Good:
+
+```typescript
+// app/main.tsx for a single-screen static game/tool
+import { createRoot } from "react-dom/client";
+import { Game } from "@/modules/game/components/game";
+```
+
+Bad:
+
+```typescript
+// Multiple screens or URL state hidden inside local component state
+// instead of adding explicit routes.
+```
+
 ### Route Registration
 
 ```typescript
