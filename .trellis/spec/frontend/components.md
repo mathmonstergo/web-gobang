@@ -184,14 +184,17 @@ For the Gobang board, keep game rules and rendering effects separated:
   events. Do not draw extra visual-only rings inside one event; compute the
   minimum crest count from required departure impulse and schedule one matching
   physical impulse per stone for each visible crest.
-- Copied reset stones must render on the board canvas while `isOnBoard` is
-  true, including after a reset crest activates their physics velocity. Moving
-  an activated reset stone from board canvas coordinates to full-viewport
-  overlay coordinates at impact creates a visible lateral jump. Render reset
-  stones on the overlay only after they have fully left the board and are in
-  the falling/depth phase.
-- Copied undo/swat stones may render on the full-viewport overlay immediately
-  because the cat effect owns their visual continuity from the swat moment.
+- The Gobang visual layer uses one canvas scene for board, stones, reset waves,
+  physics stones, and undo-cat animation. Do not add a second overlay canvas or
+  portal for physics effects. A second canvas reintroduces coordinate handoff
+  bugs when stones leave the board.
+- The single `board-canvas` may be fixed to the viewport, but it is still the
+  only visual canvas. The square `.board-surface` remains the accessible/pointer
+  target and its `getBoundingClientRect()` defines where the board is drawn in
+  scene coordinates.
+- Copied reset and undo/swat stones must keep scene-space coordinates from
+  creation until removal. Do not store `boardOrigin` or convert between
+  board-local and viewport coordinates during animation.
 - Later reset crest impacts must be checked against each moving stone's current
   viewport position. Precomputing `startedAt + initialDistance / speed` makes a
   second crest affect a stone before the visible wave reaches it.

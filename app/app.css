@@ -147,22 +147,11 @@ button {
   position: relative;
   width: 100%;
   height: 100%;
-  overflow: hidden;
-  border: 1px solid rgba(64, 42, 18, 0.24);
+  overflow: visible;
+  border: 1px solid transparent;
   border-radius: 18px;
-  background:
-    linear-gradient(115deg, rgba(255, 255, 255, 0.32), transparent 32%),
-    linear-gradient(45deg, rgba(145, 87, 30, 0.2), transparent 42%),
-    repeating-linear-gradient(
-      92deg,
-      rgba(126, 75, 27, 0.2) 0 2px,
-      transparent 2px 13px
-    ),
-    #d9a85d;
-  box-shadow:
-    inset 0 0 0 8px rgba(93, 55, 21, 0.12),
-    inset 0 0 36px rgba(62, 36, 12, 0.24),
-    0 18px 42px rgba(58, 43, 23, 0.22);
+  background: transparent;
+  box-shadow: 0 18px 42px rgba(58, 43, 23, 0.22);
   touch-action: none;
 }
 
@@ -172,22 +161,14 @@ button {
 }
 
 .board-canvas {
-  position: absolute;
-  inset: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
-  z-index: 1;
-  touch-action: none;
-}
-
-.physics-overlay-canvas {
   position: fixed;
   inset: 0;
+  display: block;
   width: 100vw;
   height: 100vh;
   pointer-events: none;
-  z-index: 60;
+  z-index: 20;
+  touch-action: none;
 }
 
 .controls {

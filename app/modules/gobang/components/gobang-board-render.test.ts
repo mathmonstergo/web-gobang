@@ -36,6 +36,8 @@ describe("GobangBoard", () => {
     );
 
     expect(markup).toContain("board-canvas");
+    expect(markup.match(/<canvas/g)).toHaveLength(1);
+    expect(markup).not.toContain("physics-overlay-canvas");
     expect(markup).not.toContain("<svg");
     expect(markup).not.toContain("stone-victory-wave");
   });

@@ -9,7 +9,6 @@ import {
   type PointerEvent,
   type ReactElement
 } from "react";
-import { createPortal } from "react-dom";
 
 import { BOARD_GRID_MAX, positionKey } from "@/modules/gobang/board-geometry";
 import {
@@ -91,6 +90,13 @@ type BoardRectSnapshot = {
   bottom: number;
 };
 
+type SceneLayout = {
+  width: number;
+  height: number;
+  boardOffsetX: number;
+  boardOffsetY: number;
+};
+
 type ResetImpulse = {
   crestStartedAt: number;
   origin: ScreenPoint;
@@ -124,7 +130,6 @@ type ResetPhysicsStone = {
   alpha: number;
   impulses: ResetImpulse[];
   radius: number;
-  boardOrigin: ScreenPoint;
   createdAt: number;
   noCollide: boolean;
   isActivated: boolean;
@@ -140,7 +145,6 @@ type CatSwatRemoval = {
   heading: number;
   radius: number;
   bodyLength: number;
-  boardOrigin: ScreenPoint;
   startedAt: number;
   launched: boolean;
 };
@@ -164,6 +168,12 @@ const STAR_POINTS: readonly Position[] = [
   { row: 11, col: 11 }
 ];
 const EMPTY_LAYOUT: CanvasLayout = { size: 0, cellSize: 0, padding: 0 };
+const EMPTY_SCENE_LAYOUT: SceneLayout = {
+  width: 0,
+  height: 0,
+  boardOffsetX: 0,
+  boardOffsetY: 0
+};
 const STONE_RADIUS_RATIO = 0.43;
 const CAT_BODY_CELLS = 5;
 const CAT_RUN_IN_MS = 880;
@@ -208,8 +218,9 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
     ref
   ): ReactElement {
     const mainCanvasRef = useRef<HTMLCanvasElement | null>(null);
-    const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const boardSurfaceRef = useRef<HTMLDivElement | null>(null);
     const layoutRef = useRef<CanvasLayout>(EMPTY_LAYOUT);
+    const sceneLayoutRef = useRef<SceneLayout>(EMPTY_SCENE_LAYOUT);
     const stateRef = useRef<GameState>(state);
     const effectsRef = useRef<DerivedEffects>(effects);
     const cursorRef = useRef<Position>({ row: 7, col: 7 });
@@ -330,13 +341,16 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           return 0;
         }
 
-        const rect: DOMRect = canvas.getBoundingClientRect();
         const layout: CanvasLayout = layoutRef.current;
+        const scene: SceneLayout = sceneLayoutRef.current;
         if (layout.size <= 0 || layout.cellSize <= 0) {
           return 0;
         }
+        if (scene.width <= 0 || scene.height <= 0) {
+          return 0;
+        }
 
-        const boardRect: BoardRectSnapshot = getBoardRectSnapshot(rect, layout);
+        const boardRect: BoardRectSnapshot = getBoardRectSnapshot(scene, layout);
         const shockOrigin: ScreenPoint =
           origin ?? getBoardCenterFromRect(boardRect);
         const now: number = performance.now();
@@ -355,21 +369,18 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
         const setups: ResetStoneSetup[] = [];
         let maxRequiredImpulse = 0;
         for (const move of moves) {
-          const point: ScreenPoint = getBoardPoint(move, layout);
-          const viewportPoint: ScreenPoint = {
-            x: rect.left + point.x,
-            y: rect.top + point.y
-          };
+          const boardPoint: ScreenPoint = getBoardPoint(move, layout);
+          const point: ScreenPoint = boardPointToScenePoint(boardPoint, scene);
           const distance: number = Math.max(
             1,
-            Math.hypot(viewportPoint.x - shockOrigin.x, viewportPoint.y - shockOrigin.y)
+            Math.hypot(point.x - shockOrigin.x, point.y - shockOrigin.y)
           );
-          const normalX: number = (viewportPoint.x - shockOrigin.x) / distance;
-          const normalY: number = (viewportPoint.y - shockOrigin.y) / distance;
+          const normalX: number = (point.x - shockOrigin.x) / distance;
+          const normalY: number = (point.y - shockOrigin.y) / distance;
           const distanceFactor: number = Math.exp(-distance / IMPULSE_DIST_DECAY);
           const rawImpulse: number = RESET_FORCE_BASE * distanceFactor;
           const exitSpeed: number = getExitSpeedForBoardPoint(
-            point,
+            boardPoint,
             normalX,
             normalY,
             layout.size,
@@ -435,10 +446,6 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
             alpha: 1,
             impulses,
             radius,
-            boardOrigin: {
-              x: rect.left,
-              y: rect.top
-            },
             createdAt: now,
             noCollide: false,
             isActivated: false
@@ -470,14 +477,24 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           return;
         }
 
-        const rect: DOMRect = canvas.getBoundingClientRect();
-        const start: ScreenPoint = getBoardPoint(move, layout);
+        const scene: SceneLayout = sceneLayoutRef.current;
+        if (scene.width <= 0 || scene.height <= 0) {
+          return;
+        }
+
+        const start: ScreenPoint = getSceneBoardPoint(move, layout, scene);
         const radius: number = layout.cellSize * STONE_RADIUS_RATIO;
         hiddenKeysRef.current.add(positionKey(move));
         const bodyLength: number = CAT_BODY_CELLS * layout.cellSize;
         const corner: ScreenPoint = {
-          x: move.col < BOARD_SIZE / 2 ? -bodyLength * 0.4 : layout.size + bodyLength * 0.4,
-          y: move.row < BOARD_SIZE / 2 ? -bodyLength * 0.4 : layout.size + bodyLength * 0.4
+          x:
+            move.col < BOARD_SIZE / 2
+              ? scene.boardOffsetX - bodyLength * 0.4
+              : scene.boardOffsetX + layout.size + bodyLength * 0.4,
+          y:
+            move.row < BOARD_SIZE / 2
+              ? scene.boardOffsetY - bodyLength * 0.4
+              : scene.boardOffsetY + layout.size + bodyLength * 0.4
         };
         const heading: number = Math.atan2(start.y - corner.y, start.x - corner.x);
         const directionX: number = Math.cos(heading);
@@ -505,10 +522,6 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           heading,
           radius,
           bodyLength,
-          boardOrigin: {
-            x: rect.left,
-            y: rect.top
-          },
           startedAt: performance.now(),
           launched: false
         });
@@ -674,25 +687,25 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
 
     useEffect(() => {
       const canvas: HTMLCanvasElement | null = mainCanvasRef.current;
-      const overlay: HTMLCanvasElement | null = overlayCanvasRef.current;
-      if (canvas === null || overlay === null) {
+      const boardSurface: HTMLDivElement | null = boardSurfaceRef.current;
+      if (canvas === null || boardSurface === null) {
         return;
       }
 
       const resize = (): void => {
-        resizeMainCanvas(canvas, layoutRef);
-        resizeOverlayCanvas(overlay);
+        resizeSceneCanvas(canvas, boardSurface, layoutRef, sceneLayoutRef);
       };
 
       resize();
       const observer = new ResizeObserver(resize);
-      observer.observe(canvas);
+      observer.observe(boardSurface);
       window.addEventListener("resize", resize);
 
       let animationFrameId = 0;
       let previousTimestamp: number = performance.now();
 
       const drawFrame = (timestamp: number): void => {
+        resize();
         const deltaMs: number = Math.min(
           33.34,
           Math.max(8, timestamp - previousTimestamp)
@@ -710,17 +723,11 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           bloomsRef,
           wavesRef,
           resetPhysicsStonesRef,
-          catSwatRemovalsRef,
-          hiddenKeysRef,
-          timestamp
-        });
-        drawOverlayCanvas({
-          canvas: overlay,
-          layout: layoutRef.current,
-          boardOrigin: getCanvasOrigin(canvas),
-          resetPhysicsStonesRef,
           resetWaveCrestsRef,
+          catSwatRemovalsRef,
           lastResetPhysicsTimestampRef,
+          hiddenKeysRef,
+          sceneLayout: sceneLayoutRef.current,
           timestamp,
           deltaMs
         });
@@ -752,8 +759,8 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
       const position: Position | null = getPositionFromClient(
         event.clientX,
         event.clientY,
-        mainCanvasRef.current,
-        layoutRef.current
+        layoutRef.current,
+        sceneLayoutRef.current
       );
 
       if (position === null) {
@@ -772,8 +779,8 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
       hoverRef.current = getPositionFromClient(
         event.clientX,
         event.clientY,
-        mainCanvasRef.current,
-        layoutRef.current
+        layoutRef.current,
+        sceneLayoutRef.current
       );
     };
 
@@ -831,17 +838,8 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
 
     return (
       <div className="board-shell">
-        {typeof document === "undefined"
-          ? null
-          : createPortal(
-              <canvas
-                ref={overlayCanvasRef}
-                aria-hidden="true"
-                className="physics-overlay-canvas"
-              />,
-              document.body
-            )}
         <div
+          ref={boardSurfaceRef}
           aria-label="五子棋棋盘"
           aria-rowcount={BOARD_SIZE}
           aria-colcount={BOARD_SIZE}
@@ -883,33 +881,34 @@ type DrawMainCanvasInput = {
   bloomsRef: WritableRef<BloomAnimation[]>;
   wavesRef: WritableRef<CanvasWaveAnimation[]>;
   resetPhysicsStonesRef: WritableRef<ResetPhysicsStone[]>;
-  catSwatRemovalsRef: WritableRef<CatSwatRemoval[]>;
-  hiddenKeysRef: WritableRef<Set<string>>;
-  timestamp: number;
-};
-
-type DrawOverlayCanvasInput = {
-  canvas: HTMLCanvasElement;
-  layout: CanvasLayout;
-  boardOrigin: ScreenPoint;
-  resetPhysicsStonesRef: WritableRef<ResetPhysicsStone[]>;
   resetWaveCrestsRef: WritableRef<ResetWaveCrest[]>;
+  catSwatRemovalsRef: WritableRef<CatSwatRemoval[]>;
   lastResetPhysicsTimestampRef: WritableRef<number>;
+  hiddenKeysRef: WritableRef<Set<string>>;
+  sceneLayout: SceneLayout;
   timestamp: number;
   deltaMs: number;
 };
 
 function drawMainCanvas(input: DrawMainCanvasInput): void {
   const context: CanvasRenderingContext2D | null = input.canvas.getContext("2d");
-  if (context === null || input.layout.size <= 0) {
+  if (
+    context === null ||
+    input.layout.size <= 0 ||
+    input.sceneLayout.width <= 0 ||
+    input.sceneLayout.height <= 0
+  ) {
     return;
   }
 
   const dpr: number = getDevicePixelRatio();
   const layout: CanvasLayout = input.layout;
+  const sceneLayout: SceneLayout = input.sceneLayout;
   context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  context.clearRect(0, 0, layout.size, layout.size);
+  context.clearRect(0, 0, sceneLayout.width, sceneLayout.height);
 
+  context.save();
+  context.translate(sceneLayout.boardOffsetX, sceneLayout.boardOffsetY);
   drawBoard(context, layout);
   pruneHiddenKeys(input.hiddenKeysRef.current, input.state.moves);
 
@@ -958,40 +957,14 @@ function drawMainCanvas(input: DrawMainCanvasInput): void {
     (wave: CanvasWaveAnimation) =>
       input.timestamp - wave.startedAt < getWaveAnimationDuration(wave.highlights)
   );
+  context.restore();
 
-  drawCatSwatRemovals({
-    context,
-    catSwatRemovalsRef: input.catSwatRemovalsRef,
-    resetPhysicsStonesRef: input.resetPhysicsStonesRef,
-    timestamp: input.timestamp
-  });
-  drawOnBoardResetPhysicsStones(
-    context,
-    input.resetPhysicsStonesRef.current
-  );
-}
-
-function drawOverlayCanvas(input: DrawOverlayCanvasInput): void {
-  const context: CanvasRenderingContext2D | null = input.canvas.getContext("2d");
-  if (context === null) {
-    return;
-  }
-
-  const width: number = window.innerWidth;
-  const height: number = window.innerHeight;
-  const dpr: number = getDevicePixelRatio();
-  const rect: DOMRect = input.canvas.getBoundingClientRect();
-  context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  context.clearRect(0, 0, width, height);
-
-  context.save();
-  context.translate(-rect.left, -rect.top);
   drawResetWaveCrests(context, input.resetWaveCrestsRef, input.timestamp);
   updateResetPhysicsStones(
     input.resetPhysicsStonesRef,
     input.lastResetPhysicsTimestampRef,
     input.layout,
-    input.boardOrigin,
+    input.sceneLayout,
     input.timestamp,
     input.deltaMs
   );
@@ -999,7 +972,12 @@ function drawOverlayCanvas(input: DrawOverlayCanvasInput): void {
     context,
     input.resetPhysicsStonesRef.current
   );
-  context.restore();
+  drawCatSwatRemovals({
+    context,
+    catSwatRemovalsRef: input.catSwatRemovalsRef,
+    resetPhysicsStonesRef: input.resetPhysicsStonesRef,
+    timestamp: input.timestamp
+  });
 }
 
 function drawBoard(context: CanvasRenderingContext2D, layout: CanvasLayout): void {
@@ -1514,7 +1492,6 @@ function createSwattedPhysicsStone(
     alpha: 1,
     impulses: [],
     radius: removal.radius,
-    boardOrigin: removal.boardOrigin,
     createdAt: timestamp,
     noCollide: true,
     isActivated: true
@@ -1747,28 +1724,20 @@ function drawCatFrontLeg(
   context.fill();
 }
 
-function drawOnBoardResetPhysicsStones(
-  context: CanvasRenderingContext2D,
-  stones: readonly ResetPhysicsStone[]
-): void {
-  for (const stone of stones) {
-    if (!stone.isOnBoard || stone.noCollide) {
-      continue;
-    }
-
-    drawStone(context, stone.x, stone.y, stone.radius, stone.player);
-  }
-}
-
 function updateResetPhysicsStones(
   stonesRef: WritableRef<ResetPhysicsStone[]>,
   lastTimestampRef: WritableRef<number>,
   layout: CanvasLayout,
-  boardOrigin: ScreenPoint,
+  sceneLayout: SceneLayout,
   timestamp: number,
   deltaMs: number
 ): void {
-  if (stonesRef.current.length === 0 || layout.size <= 0) {
+  if (
+    stonesRef.current.length === 0 ||
+    layout.size <= 0 ||
+    sceneLayout.width <= 0 ||
+    sceneLayout.height <= 0
+  ) {
     lastTimestampRef.current = timestamp;
     return;
   }
@@ -1783,14 +1752,13 @@ function updateResetPhysicsStones(
     return;
   }
 
-  for (const stone of stonesRef.current) {
-    if (stone.isOnBoard && !stone.noCollide) {
-      stone.boardOrigin = boardOrigin;
-    }
-  }
-
   applyResetImpulses(stonesRef.current, timestamp);
-  integrateResetPhysics(stonesRef.current, deltaSeconds, layout.size, timestamp);
+  integrateResetPhysics(
+    stonesRef.current,
+    deltaSeconds,
+    getSceneBoardOuterRect(sceneLayout, layout),
+    timestamp
+  );
   resolveResetCollisions(stonesRef.current);
 
   stonesRef.current = stonesRef.current.filter(
@@ -1810,19 +1778,17 @@ function applyResetImpulses(
       }
 
       const waveRadius: number = RIPPLE_SPEED * (elapsedMs / 1000);
-      const viewportX: number = stone.boardOrigin.x + stone.x;
-      const viewportY: number = stone.boardOrigin.y + stone.y;
       const distance: number = Math.max(
         1,
-        Math.hypot(viewportX - impulse.origin.x, viewportY - impulse.origin.y)
+        Math.hypot(stone.x - impulse.origin.x, stone.y - impulse.origin.y)
       );
       if (waveRadius < Math.max(0, distance - stone.radius)) {
         return waveRadius <= impulse.maxRadius + RIPPLE_LAMBDA;
       }
 
       stone.isActivated = true;
-      stone.vx += ((viewportX - impulse.origin.x) / distance) * impulse.magnitude;
-      stone.vy += ((viewportY - impulse.origin.y) / distance) * impulse.magnitude;
+      stone.vx += ((stone.x - impulse.origin.x) / distance) * impulse.magnitude;
+      stone.vy += ((stone.y - impulse.origin.y) / distance) * impulse.magnitude;
       return false;
     });
   }
@@ -1831,7 +1797,7 @@ function applyResetImpulses(
 function integrateResetPhysics(
   stones: readonly ResetPhysicsStone[],
   deltaSeconds: number,
-  boardSize: number,
+  boardRect: BoardRectSnapshot,
   timestamp: number
 ): void {
   for (const stone of stones) {
@@ -1859,10 +1825,10 @@ function integrateResetPhysics(
 
     if (
       stone.isOnBoard &&
-      (stone.x < -stone.radius ||
-        stone.x > boardSize + stone.radius ||
-        stone.y < -stone.radius ||
-        stone.y > boardSize + stone.radius)
+      (stone.x < boardRect.left - stone.radius ||
+        stone.x > boardRect.right + stone.radius ||
+        stone.y < boardRect.top - stone.radius ||
+        stone.y > boardRect.bottom + stone.radius)
     ) {
       stone.isOnBoard = false;
       stone.depth = 0;
@@ -1993,34 +1959,37 @@ function drawResetPhysicsStones(
   stones: readonly ResetPhysicsStone[]
 ): void {
   for (const stone of stones) {
-    if (!stone.isActivated || (stone.isOnBoard && !stone.noCollide)) {
+    if (stone.alpha <= 0) {
       continue;
     }
 
-    const viewportX: number = stone.boardOrigin.x + stone.x;
-    const viewportY: number = stone.boardOrigin.y + stone.y;
     context.save();
     context.globalAlpha = stone.alpha;
-    context.translate(viewportX, viewportY);
+    context.translate(stone.x, stone.y);
     context.scale(stone.scale, stone.scale);
-    context.translate(-viewportX, -viewportY);
-    drawStone(context, viewportX, viewportY, stone.radius, stone.player);
+    context.translate(-stone.x, -stone.y);
+    drawStone(context, stone.x, stone.y, stone.radius, stone.player);
     context.restore();
   }
 }
 
-function resizeMainCanvas(
+function resizeSceneCanvas(
   canvas: HTMLCanvasElement,
-  layoutRef: WritableRef<CanvasLayout>
+  boardSurface: HTMLElement,
+  layoutRef: WritableRef<CanvasLayout>,
+  sceneLayoutRef: WritableRef<SceneLayout>
 ): void {
-  const rect: DOMRect = canvas.getBoundingClientRect();
+  const rect: DOMRect = boardSurface.getBoundingClientRect();
   const size: number = Math.max(1, Math.min(rect.width, rect.height));
   const dpr: number = getDevicePixelRatio();
-  const pixelSize: number = Math.round(size * dpr);
+  const width: number = Math.max(1, window.innerWidth);
+  const height: number = Math.max(1, window.innerHeight);
+  const pixelWidth: number = Math.round(width * dpr);
+  const pixelHeight: number = Math.round(height * dpr);
 
-  if (canvas.width !== pixelSize || canvas.height !== pixelSize) {
-    canvas.width = pixelSize;
-    canvas.height = pixelSize;
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
   }
 
   const padding: number = Math.round(size * 0.052);
@@ -2029,32 +1998,26 @@ function resizeMainCanvas(
     padding,
     cellSize: (size - padding * 2) / BOARD_GRID_MAX
   };
-}
-
-function resizeOverlayCanvas(canvas: HTMLCanvasElement): void {
-  const dpr: number = getDevicePixelRatio();
-  const width: number = Math.max(1, Math.round(window.innerWidth * dpr));
-  const height: number = Math.max(1, Math.round(window.innerHeight * dpr));
-
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-  }
+  sceneLayoutRef.current = {
+    width,
+    height,
+    boardOffsetX: rect.left,
+    boardOffsetY: rect.top
+  };
 }
 
 function getPositionFromClient(
   clientX: number,
   clientY: number,
-  canvas: HTMLCanvasElement | null,
-  layout: CanvasLayout
+  layout: CanvasLayout,
+  sceneLayout: SceneLayout
 ): Position | null {
-  if (canvas === null || layout.cellSize <= 0) {
+  if (layout.cellSize <= 0) {
     return null;
   }
 
-  const rect: DOMRect = canvas.getBoundingClientRect();
-  const x: number = clientX - rect.left;
-  const y: number = clientY - rect.top;
+  const x: number = clientX - sceneLayout.boardOffsetX;
+  const y: number = clientY - sceneLayout.boardOffsetY;
   const col: number = Math.round((x - layout.padding) / layout.cellSize);
   const row: number = Math.round((y - layout.padding) / layout.cellSize);
 
@@ -2072,23 +2035,51 @@ function getBoardPoint(position: Position, layout: CanvasLayout): ScreenPoint {
   };
 }
 
-function getCanvasOrigin(canvas: HTMLCanvasElement): ScreenPoint {
-  const rect: DOMRect = canvas.getBoundingClientRect();
+function getSceneBoardPoint(
+  position: Position,
+  layout: CanvasLayout,
+  sceneLayout: SceneLayout
+): ScreenPoint {
+  return boardPointToScenePoint(getBoardPoint(position, layout), sceneLayout);
+}
+
+function boardPointToScenePoint(
+  point: ScreenPoint,
+  sceneLayout: SceneLayout
+): ScreenPoint {
   return {
-    x: rect.left,
-    y: rect.top
+    x: sceneLayout.boardOffsetX + point.x,
+    y: sceneLayout.boardOffsetY + point.y
   };
 }
 
 function getBoardRectSnapshot(
-  rect: DOMRect,
+  sceneLayout: SceneLayout,
   layout: CanvasLayout
 ): BoardRectSnapshot {
   return {
-    left: rect.left + layout.padding,
-    top: rect.top + layout.padding,
-    right: rect.left + layout.padding + BOARD_GRID_MAX * layout.cellSize,
-    bottom: rect.top + layout.padding + BOARD_GRID_MAX * layout.cellSize
+    left: sceneLayout.boardOffsetX + layout.padding,
+    top: sceneLayout.boardOffsetY + layout.padding,
+    right:
+      sceneLayout.boardOffsetX +
+      layout.padding +
+      BOARD_GRID_MAX * layout.cellSize,
+    bottom:
+      sceneLayout.boardOffsetY +
+      layout.padding +
+      BOARD_GRID_MAX * layout.cellSize
+  };
+}
+
+function getSceneBoardOuterRect(
+  sceneLayout: SceneLayout,
+  layout: CanvasLayout
+): BoardRectSnapshot {
+  return {
+    left: sceneLayout.boardOffsetX,
+    top: sceneLayout.boardOffsetY,
+    right: sceneLayout.boardOffsetX + layout.size,
+    bottom: sceneLayout.boardOffsetY + layout.size
   };
 }
 
