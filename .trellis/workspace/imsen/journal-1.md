@@ -105,3 +105,36 @@ Migrated Gobang board to a full-canvas renderer, restored prototype motion timin
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Refine Gobang removal effects
+
+**Date**: 2026-06-20
+**Task**: Refine Gobang removal effects
+**Branch**: `main`
+
+### Summary
+
+Fixed reset shockwave handoff, removed persistent focus cursor after placement, and added quadrant-based cat paw undo removal.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `025a92b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
