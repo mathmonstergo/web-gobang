@@ -24,7 +24,7 @@ import {
 } from "@/modules/gobang/types";
 
 describe("GobangBoard", () => {
-  it("renders canvas layers instead of svg stones", () => {
+  it("renders the board canvas instead of svg stones in static markup", () => {
     const state: GameState = createInitialState();
     const markup: string = renderToStaticMarkup(
       createElement(GobangBoard, {
@@ -35,7 +35,6 @@ describe("GobangBoard", () => {
     );
 
     expect(markup).toContain("board-canvas");
-    expect(markup).toContain("physics-overlay-canvas");
     expect(markup).not.toContain("<svg");
     expect(markup).not.toContain("stone-victory-wave");
   });

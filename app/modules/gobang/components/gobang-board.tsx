@@ -1,4 +1,3 @@
-import Matter from "matter-js";
 import {
   forwardRef,
   useCallback,
@@ -10,18 +9,17 @@ import {
   type PointerEvent,
   type ReactElement
 } from "react";
+import { createPortal } from "react-dom";
 
 import { BOARD_GRID_MAX, positionKey } from "@/modules/gobang/board-geometry";
 import {
   BLOOM_DURATION_MS,
   VICTORY_LOOP_MS,
-  createCatPawPath,
   createInkPoints,
   createVictoryWaveHighlights,
   createWaveHighlights,
   getWaveAnimationDuration,
   getWaveScaleFromDelay,
-  type CatPawPath,
   type CanvasLayout,
   type InkPoint
 } from "@/modules/gobang/canvas-effects";
@@ -84,30 +82,44 @@ type BoardRectSnapshot = {
   bottom: number;
 };
 
-type PhysicsStone = {
+type ResetImpulse = {
+  at: number;
+  dvx: number;
+  dvy: number;
+};
+
+type ResetPhysicsStone = {
   id: string;
   player: Player;
-  body: Matter.Body;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  isOnBoard: boolean;
+  exitNormalX: number;
+  exitNormalY: number;
+  nonZeroMomentumAt: number;
+  depth: number;
+  depthVelocity: number;
+  scale: number;
+  alpha: number;
+  impulses: ResetImpulse[];
   radius: number;
-  boardKey: string;
-  origin: ScreenPoint;
-  boardRect: BoardRectSnapshot;
+  boardOrigin: ScreenPoint;
   createdAt: number;
-  impactAt: number;
-  impactedAt: number | null;
-  isFalling: boolean;
 };
 
 type CatPawRemoval = {
   id: string;
   player: Player;
   start: ScreenPoint;
+  corner: ScreenPoint;
+  direction: number;
   radius: number;
-  path: CatPawPath;
   startedAt: number;
 };
 
-type RingAnimation = {
+type WaterRipple = {
   id: string;
   origin: ScreenPoint;
   startedAt: number;
@@ -127,13 +139,29 @@ const STAR_POINTS: readonly Position[] = [
 ];
 const EMPTY_LAYOUT: CanvasLayout = { size: 0, cellSize: 0, padding: 0 };
 const STONE_RADIUS_RATIO = 0.43;
-const CAT_PAW_APPROACH_MS = 380;
-const CAT_PAW_GRAB_MS = 160;
-const CAT_PAW_CARRY_MS = 560;
+const CAT_PAW_APPROACH_MS = 480;
+const CAT_PAW_GRAB_MS = 200;
+const CAT_PAW_HOLD_MS = 420;
+const CAT_PAW_CARRY_MS = 520;
 const CAT_PAW_TOTAL_MS =
-  CAT_PAW_APPROACH_MS + CAT_PAW_GRAB_MS + CAT_PAW_CARRY_MS;
-const RESET_RING_SPEED = 850;
-const PHYSICS_MAX_LIFE_MS = 6500;
+  CAT_PAW_APPROACH_MS + CAT_PAW_GRAB_MS + CAT_PAW_HOLD_MS + CAT_PAW_CARRY_MS;
+const CAT_PAW_RADIUS_MULTIPLIER = 3.75;
+const RIPPLE_SPEED = 370;
+const RIPPLE_LAMBDA = 60;
+const RIPPLE_VISUAL_RING_COUNT = 4;
+const IMPULSE_BASE = 1180;
+const IMPULSE_DIST_DECAY = 760;
+const RESET_EXIT_TARGET_SECONDS = 0.86;
+const RESET_MIN_EXIT_SPEED = 760;
+const RESET_MAX_EXIT_SPEED = 1700;
+const RESET_ZERO_MOMENTUM_NUDGE_AFTER_MS = 360;
+const RESET_ZERO_MOMENTUM_NUDGE_SPEED = 190;
+const RESET_INITIAL_FALL_VELOCITY = 140;
+const RESET_FALL_GRAVITY = 1700;
+const RESET_FALL_SCALE_DEPTH = 540;
+const RESET_FALL_FADE_START_DEPTH = 180;
+const RESET_FALL_FADE_DISTANCE = 620;
+const RESET_LOCK_AFTER_LAST_IMPULSE_MS = 3600;
 const DEVICE_PIXEL_RATIO_CAP = 2;
 
 export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
@@ -152,13 +180,13 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
     const isKeyboardCursorVisibleRef = useRef(false);
     const bloomsRef = useRef<BloomAnimation[]>([]);
     const wavesRef = useRef<CanvasWaveAnimation[]>([]);
-    const physicsStonesRef = useRef<PhysicsStone[]>([]);
+    const resetPhysicsStonesRef = useRef<ResetPhysicsStone[]>([]);
     const catPawRemovalsRef = useRef<CatPawRemoval[]>([]);
-    const ringsRef = useRef<RingAnimation[]>([]);
+    const waterRipplesRef = useRef<WaterRipple[]>([]);
     const hiddenKeysRef = useRef<Set<string>>(new Set());
     const seenPlacementIdsRef = useRef<Set<string>>(new Set());
     const seenWaveIdsRef = useRef<Set<string>>(new Set());
-    const engineRef = useRef<Matter.Engine | null>(null);
+    const lastResetPhysicsTimestampRef = useRef<number>(0);
     const nextAnimationIdRef = useRef(0);
     const victoryTimerRef = useRef<number | null>(null);
     const [, setRenderTick] = useState(0);
@@ -194,61 +222,86 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
         const now: number = performance.now();
         const radius: number = layout.cellSize * STONE_RADIUS_RATIO;
         const maxRadius: number =
-          getMaxDistanceToBoardCorners(shockOrigin, boardRect) + radius * 4;
+          getMaxDistanceToBoardCorners(shockOrigin, boardRect) + RIPPLE_LAMBDA;
 
         bloomsRef.current = [];
         wavesRef.current = [];
+        catPawRemovalsRef.current = [];
         hiddenKeysRef.current.clear();
-        clearResetPhysics(engineRef, physicsStonesRef);
-        ringsRef.current = [];
-        ringsRef.current.push({
-          id: createAnimationId("reset-ring"),
+        resetPhysicsStonesRef.current = [];
+        waterRipplesRef.current = [];
+        waterRipplesRef.current.push({
+          id: createAnimationId("water-ripple"),
           origin: shockOrigin,
           startedAt: now,
           maxRadius
         });
+        lastResetPhysicsTimestampRef.current = now;
 
-        const engine: Matter.Engine = getPhysicsEngine(engineRef);
-        let maxImpactDelay = 0;
+        let maxImpulseDelay = 0;
         for (const move of moves) {
-          const point: ScreenPoint = getScreenPointFromMove(move, rect, layout);
+          const point: ScreenPoint = getBoardPoint(move, layout);
+          const viewportPoint: ScreenPoint = {
+            x: rect.left + point.x,
+            y: rect.top + point.y
+          };
           const distance: number = Math.max(
             1,
-            Math.hypot(point.x - shockOrigin.x, point.y - shockOrigin.y)
+            Math.hypot(viewportPoint.x - shockOrigin.x, viewportPoint.y - shockOrigin.y)
           );
-          const impactDelay: number = (distance / RESET_RING_SPEED) * 1000;
-          const body: Matter.Body = Matter.Bodies.circle(
-            point.x,
-            point.y,
-            radius,
-            {
-              density: 0.004,
-              friction: 0.04,
-              frictionAir: 0.008,
-              isStatic: true,
-              restitution: 0.82
-            },
-            32
+          const normalX: number = (viewportPoint.x - shockOrigin.x) / distance;
+          const normalY: number = (viewportPoint.y - shockOrigin.y) / distance;
+          const distanceFactor: number = Math.exp(-distance / IMPULSE_DIST_DECAY);
+          const hitDelay: number = (distance / RIPPLE_SPEED) * 1000;
+          const rawImpulse: number = IMPULSE_BASE * distanceFactor;
+          const exitSpeed: number = getExitSpeedForBoardPoint(
+            point,
+            normalX,
+            normalY,
+            layout.size,
+            radius
           );
+          const impulse: number = clampNumber(
+            Math.max(rawImpulse, exitSpeed),
+            RESET_MIN_EXIT_SPEED,
+            RESET_MAX_EXIT_SPEED
+          );
+          const impulses: ResetImpulse[] = [];
 
-          Matter.Composite.add(engine.world, body);
-          physicsStonesRef.current.push({
+          impulses.push({
+            at: now + hitDelay,
+            dvx: normalX * impulse,
+            dvy: normalY * impulse
+          });
+          maxImpulseDelay = Math.max(maxImpulseDelay, hitDelay);
+
+          resetPhysicsStonesRef.current.push({
             id: createAnimationId("reset-stone"),
             player: move.player,
-            body,
+            x: point.x,
+            y: point.y,
+            vx: 0,
+            vy: 0,
+            isOnBoard: true,
+            exitNormalX: normalX,
+            exitNormalY: normalY,
+            nonZeroMomentumAt:
+              now + hitDelay + RESET_ZERO_MOMENTUM_NUDGE_AFTER_MS,
+            depth: 0,
+            depthVelocity: 0,
+            scale: 1,
+            alpha: 1,
+            impulses,
             radius,
-            boardKey: positionKey(move),
-            origin: shockOrigin,
-            boardRect,
+            boardOrigin: {
+              x: rect.left,
+              y: rect.top
+            },
             createdAt: now,
-            impactAt: now + impactDelay,
-            impactedAt: null,
-            isFalling: false
           });
-          maxImpactDelay = Math.max(maxImpactDelay, impactDelay);
         }
 
-        return maxImpactDelay + 140;
+        return maxImpulseDelay + RESET_LOCK_AFTER_LAST_IMPULSE_MS;
       },
       [createAnimationId]
     );
@@ -260,22 +313,25 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           return;
         }
 
-        const rect: DOMRect = canvas.getBoundingClientRect();
         const layout: CanvasLayout = layoutRef.current;
         if (layout.size <= 0 || layout.cellSize <= 0) {
           return;
         }
 
-        const boardRect: BoardRectSnapshot = getBoardRectSnapshot(rect, layout);
-        const start: ScreenPoint = getScreenPointFromMove(move, rect, layout);
+        const start: ScreenPoint = getBoardPoint(move, layout);
+        const corner: ScreenPoint = {
+          x: move.col < BOARD_SIZE / 2 ? 0 : layout.size,
+          y: move.row < BOARD_SIZE / 2 ? 0 : layout.size
+        };
         const radius: number = layout.cellSize * STONE_RADIUS_RATIO;
         hiddenKeysRef.current.add(positionKey(move));
         catPawRemovalsRef.current.push({
           id: createAnimationId("cat-paw"),
           player: move.player,
           start,
+          corner,
+          direction: Math.atan2(start.y - corner.y, start.x - corner.x),
           radius,
-          path: createCatPawPath(start, boardRect, radius),
           startedAt: performance.now()
         });
       },
@@ -438,16 +494,17 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           isKeyboardCursorVisible: isKeyboardCursorVisibleRef.current,
           bloomsRef,
           wavesRef,
+          resetPhysicsStonesRef,
+          catPawRemovalsRef,
           hiddenKeysRef,
           timestamp
         });
         drawOverlayCanvas({
           canvas: overlay,
-          engineRef,
-          physicsStonesRef,
-          catPawRemovalsRef,
-          ringsRef,
-          hiddenKeysRef,
+          layout: layoutRef.current,
+          resetPhysicsStonesRef,
+          waterRipplesRef,
+          lastResetPhysicsTimestampRef,
           timestamp,
           deltaMs
         });
@@ -557,11 +614,16 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
 
     return (
       <div className="board-shell">
-        <canvas
-          ref={overlayCanvasRef}
-          aria-hidden="true"
-          className="physics-overlay-canvas"
-        />
+        {typeof document === "undefined"
+          ? null
+          : createPortal(
+              <canvas
+                ref={overlayCanvasRef}
+                aria-hidden="true"
+                className="physics-overlay-canvas"
+              />,
+              document.body
+            )}
         <div
           aria-label="五子棋棋盘"
           aria-rowcount={BOARD_SIZE}
@@ -603,17 +665,18 @@ type DrawMainCanvasInput = {
   isKeyboardCursorVisible: boolean;
   bloomsRef: WritableRef<BloomAnimation[]>;
   wavesRef: WritableRef<CanvasWaveAnimation[]>;
+  resetPhysicsStonesRef: WritableRef<ResetPhysicsStone[]>;
+  catPawRemovalsRef: WritableRef<CatPawRemoval[]>;
   hiddenKeysRef: WritableRef<Set<string>>;
   timestamp: number;
 };
 
 type DrawOverlayCanvasInput = {
   canvas: HTMLCanvasElement;
-  engineRef: WritableRef<Matter.Engine | null>;
-  physicsStonesRef: WritableRef<PhysicsStone[]>;
-  catPawRemovalsRef: WritableRef<CatPawRemoval[]>;
-  ringsRef: WritableRef<RingAnimation[]>;
-  hiddenKeysRef: WritableRef<Set<string>>;
+  layout: CanvasLayout;
+  resetPhysicsStonesRef: WritableRef<ResetPhysicsStone[]>;
+  waterRipplesRef: WritableRef<WaterRipple[]>;
+  lastResetPhysicsTimestampRef: WritableRef<number>;
   timestamp: number;
   deltaMs: number;
 };
@@ -677,6 +740,16 @@ function drawMainCanvas(input: DrawMainCanvasInput): void {
     (wave: CanvasWaveAnimation) =>
       input.timestamp - wave.startedAt < getWaveAnimationDuration(wave.highlights)
   );
+
+  drawCatPawRemovals({
+    context,
+    catPawRemovalsRef: input.catPawRemovalsRef,
+    timestamp: input.timestamp
+  });
+  drawOnBoardResetPhysicsStones(
+    context,
+    input.resetPhysicsStonesRef.current
+  );
 }
 
 function drawOverlayCanvas(input: DrawOverlayCanvasInput): void {
@@ -688,23 +761,25 @@ function drawOverlayCanvas(input: DrawOverlayCanvasInput): void {
   const width: number = window.innerWidth;
   const height: number = window.innerHeight;
   const dpr: number = getDevicePixelRatio();
+  const rect: DOMRect = input.canvas.getBoundingClientRect();
   context.setTransform(dpr, 0, 0, dpr, 0, 0);
   context.clearRect(0, 0, width, height);
 
-  drawResetRings(context, input.ringsRef, input.timestamp);
-  drawCatPawRemovals({
-    context,
-    catPawRemovalsRef: input.catPawRemovalsRef,
-    timestamp: input.timestamp
-  });
-  updatePhysicsStones(
-    input.engineRef,
-    input.physicsStonesRef,
-    input.hiddenKeysRef,
+  context.save();
+  context.translate(-rect.left, -rect.top);
+  drawWaterRipples(context, input.waterRipplesRef, input.timestamp);
+  updateResetPhysicsStones(
+    input.resetPhysicsStonesRef,
+    input.lastResetPhysicsTimestampRef,
+    input.layout,
     input.timestamp,
     input.deltaMs
   );
-  drawPhysicsStones(context, input.physicsStonesRef.current, input.timestamp);
+  drawOffBoardResetPhysicsStones(
+    context,
+    input.resetPhysicsStonesRef.current
+  );
+  context.restore();
 }
 
 function drawBoard(context: CanvasRenderingContext2D, layout: CanvasLayout): void {
@@ -1040,34 +1115,81 @@ function drawFocusCursor(
   context.restore();
 }
 
-function drawResetRings(
+function drawWaterRipples(
   context: CanvasRenderingContext2D,
-  ringsRef: WritableRef<RingAnimation[]>,
+  ripplesRef: WritableRef<WaterRipple[]>,
   timestamp: number
 ): void {
-  ringsRef.current = ringsRef.current.filter((ring: RingAnimation) => {
-    const seconds: number = (timestamp - ring.startedAt) / 1000;
-    const radius: number = RESET_RING_SPEED * seconds;
-    if (radius > ring.maxRadius) {
+  ripplesRef.current = ripplesRef.current.filter((ripple: WaterRipple) => {
+    const seconds: number = (timestamp - ripple.startedAt) / 1000;
+    if (seconds < 0) {
+      return true;
+    }
+
+    if (RIPPLE_SPEED * seconds > ripple.maxRadius + RIPPLE_LAMBDA) {
       return false;
     }
 
-    const alpha: number = Math.max(0, 0.82 - seconds * 1.55);
-    if (alpha <= 0) {
-      return false;
+    drawWaterRipple(context, ripple, seconds);
+    return seconds < 3.5;
+  });
+}
+
+function drawWaterRipple(
+  context: CanvasRenderingContext2D,
+  ripple: WaterRipple,
+  seconds: number
+): void {
+  const { origin } = ripple;
+
+  if (seconds < 0.4) {
+    const splashProgress: number = seconds / 0.4;
+    const splashRadius: number = Math.max(0.1, splashProgress * 28);
+    context.save();
+    context.beginPath();
+    context.arc(origin.x, origin.y, splashRadius, 0, Math.PI * 2);
+    context.strokeStyle = `rgba(255,252,235,${Math.max(0, (1 - splashProgress) * 0.85)})`;
+    context.lineWidth = 2.5;
+    context.shadowColor = `rgba(255,240,180,${(1 - splashProgress) * 0.6})`;
+    context.shadowBlur = 14;
+    context.stroke();
+    context.restore();
+  }
+
+  for (let ring = 0; ring < RIPPLE_VISUAL_RING_COUNT; ring += 1) {
+    const radius: number = RIPPLE_SPEED * seconds - ring * RIPPLE_LAMBDA;
+    if (radius <= 0.5) {
+      continue;
+    }
+
+    const distanceDecay: number = Math.exp(-radius / 460);
+    const timeDecay: number = Math.max(0, 1 - seconds / 2.1);
+    const ringDecay: number = Math.pow(0.7, ring);
+    const alpha: number = distanceDecay * timeDecay * ringDecay;
+    if (alpha < 0.015) {
+      continue;
     }
 
     context.save();
     context.beginPath();
-    context.arc(ring.origin.x, ring.origin.y, radius, 0, Math.PI * 2);
-    context.strokeStyle = `rgba(240,200,100,${alpha})`;
-    context.lineWidth = Math.max(2, 7 - seconds * 4);
-    context.shadowColor = `rgba(255,220,120,${alpha * 0.75})`;
-    context.shadowBlur = 18;
+    context.arc(origin.x, origin.y, radius, 0, Math.PI * 2);
+    context.strokeStyle = `rgba(205,232,255,${alpha * 0.88})`;
+    context.lineWidth = 1.8;
+    context.shadowColor = `rgba(160,215,255,${alpha * 0.6})`;
+    context.shadowBlur = 12;
     context.stroke();
+
+    if (radius > 7) {
+      context.beginPath();
+      context.arc(origin.x, origin.y, Math.max(0.5, radius - 6), 0, Math.PI * 2);
+      context.strokeStyle = `rgba(195,228,255,${alpha * 0.28})`;
+      context.lineWidth = 10;
+      context.shadowBlur = 24;
+      context.stroke();
+    }
+
     context.restore();
-    return true;
-  });
+  }
 }
 
 type DrawCatPawRemovalsInput = {
@@ -1097,278 +1219,360 @@ function drawCatPawRemoval(
   removal: CatPawRemoval,
   age: number
 ): void {
-  const path: CatPawPath = removal.path;
-  const approachProgress: number = easeOutCubic(
-    Math.min(1, age / CAT_PAW_APPROACH_MS)
-  );
-  const grabAge: number = age - CAT_PAW_APPROACH_MS;
-  const carryAge: number = age - CAT_PAW_APPROACH_MS - CAT_PAW_GRAB_MS;
-  const isCarrying: boolean = carryAge > 0;
-  const carryProgress: number = isCarrying
-    ? easeInOutCubic(Math.min(1, carryAge / CAT_PAW_CARRY_MS))
-    : 0;
-  const pawPoint: ScreenPoint = isCarrying
-    ? lerpPoint(path.target, path.exit, carryProgress)
-    : lerpPoint(path.entry, path.target, approachProgress);
-  const stonePoint: ScreenPoint = isCarrying
-    ? getCarriedStonePoint(pawPoint, removal.radius, path.angle)
-    : removal.start;
-  const grabProgress: number =
-    grabAge <= 0 ? 0 : easeOutQuad(Math.min(1, grabAge / CAT_PAW_GRAB_MS));
-  const pawScale: number =
-    0.88 + approachProgress * 0.12 + Math.sin(grabProgress * Math.PI) * 0.08;
-  const stoneScale: number = isCarrying
-    ? 1 - carryProgress * 0.18
-    : 1 + Math.sin(grabProgress * Math.PI) * 0.08;
-  const fade: number = isCarrying && carryProgress > 0.72
-    ? Math.max(0, 1 - (carryProgress - 0.72) / 0.28)
-    : 1;
+  let pawPoint: ScreenPoint = removal.corner;
+  let pawScale = 1;
+  let pawAlpha = 1;
+  let stonePoint: ScreenPoint = removal.start;
+
+  if (age < CAT_PAW_APPROACH_MS) {
+    const progress: number = easeInOutSine(age / CAT_PAW_APPROACH_MS);
+    pawPoint = lerpPoint(removal.corner, removal.start, progress);
+    pawAlpha = Math.min(1, age / 80);
+    stonePoint = removal.start;
+  } else if (age < CAT_PAW_APPROACH_MS + CAT_PAW_GRAB_MS) {
+    const progress: number = (age - CAT_PAW_APPROACH_MS) / CAT_PAW_GRAB_MS;
+    pawPoint = removal.start;
+    pawScale = 1 - 0.13 * Math.sin(progress * Math.PI);
+    stonePoint = removal.start;
+  } else if (age < CAT_PAW_APPROACH_MS + CAT_PAW_GRAB_MS + CAT_PAW_HOLD_MS) {
+    const holdProgress: number =
+      (age - CAT_PAW_APPROACH_MS - CAT_PAW_GRAB_MS) / CAT_PAW_HOLD_MS;
+    pawPoint = removal.start;
+    pawScale = 1 + 0.025 * Math.sin(holdProgress * Math.PI * 2);
+    stonePoint = removal.start;
+  } else {
+    const progress: number = easeInOutSine(
+      (age - CAT_PAW_APPROACH_MS - CAT_PAW_GRAB_MS - CAT_PAW_HOLD_MS) /
+        CAT_PAW_CARRY_MS
+    );
+    pawPoint = lerpPoint(removal.start, removal.corner, progress);
+    stonePoint = pawPoint;
+  }
 
   context.save();
-  context.globalAlpha = fade;
-  context.translate(stonePoint.x, stonePoint.y);
-  context.scale(stoneScale, stoneScale);
-  drawStone(context, 0, 0, removal.radius, removal.player);
+  drawStone(context, stonePoint.x, stonePoint.y, removal.radius, removal.player);
   context.restore();
 
   context.save();
-  context.globalAlpha = fade;
+  context.globalAlpha = pawAlpha;
   context.translate(pawPoint.x, pawPoint.y);
-  context.rotate(path.angle);
   context.scale(pawScale, pawScale);
-  drawCatPaw(context, removal.radius);
+  context.translate(-pawPoint.x, -pawPoint.y);
+  drawCatPaw(
+    context,
+    pawPoint.x,
+    pawPoint.y,
+    removal.radius * CAT_PAW_RADIUS_MULTIPLIER,
+    removal.direction
+  );
   context.restore();
 }
 
 function drawCatPaw(
   context: CanvasRenderingContext2D,
-  stoneRadius: number
+  x: number,
+  y: number,
+  radius: number,
+  direction: number
 ): void {
-  const pawRadius: number = stoneRadius * 1.25;
-  context.save();
-  context.shadowColor = "rgba(18, 10, 4, 0.28)";
-  context.shadowBlur = pawRadius * 0.32;
-  context.shadowOffsetY = pawRadius * 0.12;
+  if (radius <= 0) {
+    return;
+  }
 
-  const furGradient: CanvasGradient = context.createLinearGradient(
-    0,
-    -pawRadius * 2.1,
-    0,
-    pawRadius * 1.8
-  );
-  furGradient.addColorStop(0, "#fff1dc");
-  furGradient.addColorStop(0.55, "#e7b883");
-  furGradient.addColorStop(1, "#b87846");
-  context.fillStyle = furGradient;
+  context.save();
+  context.translate(x, y);
+  context.rotate(direction);
+
+  const fill = "rgba(234, 172, 182, 0.96)";
+  const stroke = "rgba(192, 112, 128, 0.52)";
+  const highlight = "rgba(255, 218, 224, 0.55)";
+
+  context.shadowColor = "rgba(140, 50, 70, 0.28)";
+  context.shadowBlur = 10;
+  context.shadowOffsetX = 1.5;
+  context.shadowOffsetY = 1.5;
+  context.fillStyle = fill;
   context.beginPath();
-  context.roundRect(
-    -pawRadius * 0.48,
-    -pawRadius * 2.5,
-    pawRadius * 0.96,
-    pawRadius * 3.1,
-    pawRadius * 0.42
-  );
+  context.ellipse(0, 0, radius * 0.44, radius * 0.4, 0, 0, Math.PI * 2);
   context.fill();
 
   context.shadowColor = "transparent";
   context.shadowBlur = 0;
+  context.shadowOffsetX = 0;
   context.shadowOffsetY = 0;
-  context.fillStyle = "#f1bf91";
+  context.strokeStyle = stroke;
+  context.lineWidth = 1.2;
+  context.stroke();
+
+  context.fillStyle = highlight;
   context.beginPath();
-  context.ellipse(0, 0, pawRadius * 0.72, pawRadius * 0.58, 0, 0, Math.PI * 2);
+  context.ellipse(-radius * 0.06, -radius * 0.1, radius * 0.22, radius * 0.17, 0, 0, Math.PI * 2);
   context.fill();
 
-  context.fillStyle = "#f6d0b0";
-  const toePads: readonly ScreenPoint[] = [
-    { x: -pawRadius * 0.58, y: -pawRadius * 0.82 },
-    { x: -pawRadius * 0.2, y: -pawRadius * 1.04 },
-    { x: pawRadius * 0.2, y: -pawRadius * 1.04 },
-    { x: pawRadius * 0.58, y: -pawRadius * 0.82 }
+  const toes: readonly {
+    x: number;
+    y: number;
+    rx: number;
+    ry: number;
+  }[] = [
+    { x: radius * 0.47, y: -radius * 0.28, rx: radius * 0.163, ry: radius * 0.145 },
+    { x: radius * 0.6, y: -radius * 0.08, rx: radius * 0.153, ry: radius * 0.138 },
+    { x: radius * 0.6, y: radius * 0.08, rx: radius * 0.153, ry: radius * 0.138 },
+    { x: radius * 0.47, y: radius * 0.28, rx: radius * 0.163, ry: radius * 0.145 }
   ];
 
-  for (const toe of toePads) {
+  for (const toe of toes) {
+    context.fillStyle = fill;
+    context.beginPath();
+    context.ellipse(toe.x, toe.y, toe.rx, toe.ry, 0, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = stroke;
+    context.lineWidth = 0.9;
+    context.stroke();
+
+    context.fillStyle = highlight;
     context.beginPath();
     context.ellipse(
-      toe.x,
-      toe.y,
-      pawRadius * 0.24,
-      pawRadius * 0.32,
-      toe.x * 0.004,
+      toe.x - toe.rx * 0.2,
+      toe.y - toe.ry * 0.25,
+      toe.rx * 0.5,
+      toe.ry * 0.45,
+      0,
       0,
       Math.PI * 2
     );
     context.fill();
   }
 
-  context.fillStyle = "rgba(255, 255, 255, 0.24)";
-  context.beginPath();
-  context.ellipse(
-    -pawRadius * 0.18,
-    -pawRadius * 1.82,
-    pawRadius * 0.16,
-    pawRadius * 0.5,
-    -0.18,
-    0,
-    Math.PI * 2
-  );
-  context.fill();
   context.restore();
 }
 
-function getCarriedStonePoint(
-  pawPoint: ScreenPoint,
-  stoneRadius: number,
-  angle: number
-): ScreenPoint {
-  const offset: number = stoneRadius * 0.24;
-  return {
-    x: pawPoint.x + Math.sin(angle) * offset,
-    y: pawPoint.y - Math.cos(angle) * offset
-  };
-}
-
-function clearResetPhysics(
-  engineRef: WritableRef<Matter.Engine | null>,
-  physicsStonesRef: WritableRef<PhysicsStone[]>
-): void {
-  const engine: Matter.Engine | null = engineRef.current;
-  if (engine !== null) {
-    for (const stone of physicsStonesRef.current) {
-      Matter.Composite.remove(engine.world, stone.body);
-    }
-  }
-
-  physicsStonesRef.current = [];
-}
-
-function updatePhysicsStones(
-  engineRef: WritableRef<Matter.Engine | null>,
-  physicsStonesRef: WritableRef<PhysicsStone[]>,
-  hiddenKeysRef: WritableRef<Set<string>>,
+function updateResetPhysicsStones(
+  stonesRef: WritableRef<ResetPhysicsStone[]>,
+  lastTimestampRef: WritableRef<number>,
+  layout: CanvasLayout,
   timestamp: number,
   deltaMs: number
 ): void {
-  if (physicsStonesRef.current.length === 0) {
+  if (stonesRef.current.length === 0 || layout.size <= 0) {
+    lastTimestampRef.current = timestamp;
     return;
   }
 
-  const engine: Matter.Engine = getPhysicsEngine(engineRef);
-
-  for (const stone of physicsStonesRef.current) {
-    if (stone.impactedAt === null && timestamp >= stone.impactAt) {
-      impactResetStone(stone, timestamp);
-      hiddenKeysRef.current.add(stone.boardKey);
-    }
+  const previousTimestamp: number = lastTimestampRef.current || timestamp;
+  const deltaSeconds: number = Math.min(
+    0.033,
+    Math.max(0, (timestamp - previousTimestamp || deltaMs) / 1000)
+  );
+  lastTimestampRef.current = timestamp;
+  if (deltaSeconds <= 0) {
+    return;
   }
 
-  Matter.Engine.update(engine, deltaMs);
+  applyResetImpulses(stonesRef.current, timestamp);
+  integrateResetPhysics(stonesRef.current, deltaSeconds, layout.size, timestamp);
+  resolveResetCollisions(stonesRef.current);
 
-  const activeStones: PhysicsStone[] = [];
-  for (const stone of physicsStonesRef.current) {
-    updateStoneFalling(stone);
-    const isExpired: boolean =
-      stone.body.position.y > window.innerHeight + stone.radius * 8 ||
-      timestamp - stone.createdAt > PHYSICS_MAX_LIFE_MS;
-
-    if (isExpired) {
-      Matter.Composite.remove(engine.world, stone.body);
-      continue;
-    }
-
-    activeStones.push(stone);
-  }
-
-  physicsStonesRef.current = activeStones;
+  stonesRef.current = stonesRef.current.filter(
+    (stone: ResetPhysicsStone) => stone.isOnBoard || stone.alpha > 0.01
+  );
 }
 
-function impactResetStone(stone: PhysicsStone, timestamp: number): void {
-  const position = stone.body.position;
-  const dx: number = position.x - stone.origin.x;
-  const dy: number = position.y - stone.origin.y;
-  const distance: number = Math.max(1, Math.hypot(dx, dy));
-  const nx: number = dx / distance;
-  const ny: number = dy / distance;
-  const tangential: number = ((hashStringToUnit(stone.id) - 0.5) * 2) * 2.4;
-
-  Matter.Body.setStatic(stone.body, false);
-  Matter.Body.setVelocity(stone.body, {
-    x: nx * 19 + -ny * tangential,
-    y: ny * 16 + nx * tangential - 3.5
-  });
-  Matter.Body.setAngularVelocity(stone.body, (hashStringToUnit(`${stone.id}:a`) - 0.5) * 0.5);
-  stone.impactedAt = timestamp;
-}
-
-function updateStoneFalling(stone: PhysicsStone): void {
-  if (stone.impactedAt === null) {
-    return;
-  }
-
-  const position = stone.body.position;
-  const outsideBoard: boolean =
-    position.x < stone.boardRect.left - stone.radius ||
-    position.x > stone.boardRect.right + stone.radius ||
-    position.y < stone.boardRect.top - stone.radius ||
-    position.y > stone.boardRect.bottom + stone.radius;
-
-  if (!outsideBoard) {
-    return;
-  }
-
-  if (!stone.isFalling) {
-    Matter.Body.setVelocity(stone.body, {
-      x: stone.body.velocity.x * 0.5,
-      y: Math.max(stone.body.velocity.y, 2.2)
-    });
-    stone.isFalling = true;
-    return;
-  }
-
-  Matter.Body.setVelocity(stone.body, {
-    x: stone.body.velocity.x * 0.985,
-    y: stone.body.velocity.y
-  });
-}
-
-function drawPhysicsStones(
-  context: CanvasRenderingContext2D,
-  stones: readonly PhysicsStone[],
+function applyResetImpulses(
+  stones: readonly ResetPhysicsStone[],
   timestamp: number
 ): void {
   for (const stone of stones) {
-    if (stone.impactedAt === null) {
-      continue;
-    }
+    stone.impulses = stone.impulses.filter((impulse: ResetImpulse) => {
+      if (timestamp < impulse.at) {
+        return true;
+      }
 
-    const position = stone.body.position;
-    const impactAge: number = timestamp - stone.impactedAt;
-    const impactScale: number =
-      impactAge >= 0 && impactAge < 120
-        ? 1 + 0.38 * Math.sin((impactAge / 120) * Math.PI)
-        : 1;
-
-    context.save();
-    context.translate(position.x, position.y);
-    context.rotate(stone.body.angle);
-    context.scale(impactScale, impactScale);
-    drawStone(context, 0, 0, stone.radius, stone.player);
-    context.restore();
+      stone.vx += impulse.dvx;
+      stone.vy += impulse.dvy;
+      return false;
+    });
   }
 }
 
-function getPhysicsEngine(
-  engineRef: WritableRef<Matter.Engine | null>
-): Matter.Engine {
-  if (engineRef.current !== null) {
-    return engineRef.current;
+function integrateResetPhysics(
+  stones: readonly ResetPhysicsStone[],
+  deltaSeconds: number,
+  boardSize: number,
+  timestamp: number
+): void {
+  for (const stone of stones) {
+    if (stone.isOnBoard) {
+      applyZeroMomentumNudge(stone, timestamp);
+    } else {
+      stone.depthVelocity += RESET_FALL_GRAVITY * deltaSeconds;
+      stone.depth += stone.depthVelocity * deltaSeconds;
+      stone.scale = clampNumber(
+        1 - stone.depth / RESET_FALL_SCALE_DEPTH,
+        0.035,
+        1
+      );
+      stone.alpha = clampNumber(
+        1 -
+          Math.max(0, stone.depth - RESET_FALL_FADE_START_DEPTH) /
+            RESET_FALL_FADE_DISTANCE,
+        0,
+        1
+      );
+    }
+
+    stone.x += stone.vx * deltaSeconds;
+    stone.y += stone.vy * deltaSeconds;
+
+    if (
+      stone.isOnBoard &&
+      (stone.x < 0 || stone.x > boardSize || stone.y < 0 || stone.y > boardSize)
+    ) {
+      stone.isOnBoard = false;
+      stone.depth = 0;
+      stone.depthVelocity =
+        RESET_INITIAL_FALL_VELOCITY + Math.hypot(stone.vx, stone.vy) * 0.08;
+    }
+  }
+}
+
+function applyZeroMomentumNudge(
+  stone: ResetPhysicsStone,
+  timestamp: number
+): void {
+  if (timestamp < stone.nonZeroMomentumAt || stone.impulses.length > 0) {
+    return;
   }
 
-  const engine: Matter.Engine = Matter.Engine.create();
-  engine.gravity.x = 0;
-  engine.gravity.y = 1.35;
-  engine.gravity.scale = 0.0017;
-  engineRef.current = engine;
-  return engine;
+  const speed: number = Math.hypot(stone.vx, stone.vy);
+  if (speed >= RESET_ZERO_MOMENTUM_NUDGE_SPEED) {
+    return;
+  }
+
+  const fallbackSpeed: number = Math.max(speed, RESET_ZERO_MOMENTUM_NUDGE_SPEED);
+  stone.vx = stone.exitNormalX * fallbackSpeed;
+  stone.vy = stone.exitNormalY * fallbackSpeed;
+}
+
+function resolveResetCollisions(stones: readonly ResetPhysicsStone[]): void {
+  const onBoardStones: ResetPhysicsStone[] = stones.filter(
+    (stone: ResetPhysicsStone) => stone.isOnBoard
+  );
+  if (onBoardStones.length < 2) {
+    return;
+  }
+
+  const radius: number = onBoardStones[0]?.radius ?? 0;
+  const diameter: number = radius * 2;
+  for (let index = 0; index < onBoardStones.length - 1; index += 1) {
+    const stoneA: ResetPhysicsStone = onBoardStones[index];
+    for (let otherIndex = index + 1; otherIndex < onBoardStones.length; otherIndex += 1) {
+      const stoneB: ResetPhysicsStone = onBoardStones[otherIndex];
+      const dx: number = stoneB.x - stoneA.x;
+      const dy: number = stoneB.y - stoneA.y;
+      const distanceSquared: number = dx * dx + dy * dy;
+      if (distanceSquared >= diameter * diameter) {
+        continue;
+      }
+
+      const normal: ScreenPoint = getCollisionNormal(
+        stoneA,
+        stoneB,
+        dx,
+        dy,
+        distanceSquared
+      );
+      const distance: number = Math.max(0.001, Math.sqrt(distanceSquared));
+      const normalX: number = normal.x;
+      const normalY: number = normal.y;
+      const penetration: number = (diameter - distance) * 0.52;
+      stoneA.x -= normalX * penetration;
+      stoneA.y -= normalY * penetration;
+      stoneB.x += normalX * penetration;
+      stoneB.y += normalY * penetration;
+
+      const relativeVelocity: number =
+        (stoneB.vx - stoneA.vx) * normalX + (stoneB.vy - stoneA.vy) * normalY;
+      if (relativeVelocity >= 0) {
+        continue;
+      }
+
+      const impulse: number = -relativeVelocity;
+      stoneA.vx -= impulse * normalX;
+      stoneA.vy -= impulse * normalY;
+      stoneB.vx += impulse * normalX;
+      stoneB.vy += impulse * normalY;
+      applyZeroMomentumNudge(stoneA, stoneA.nonZeroMomentumAt);
+      applyZeroMomentumNudge(stoneB, stoneB.nonZeroMomentumAt);
+    }
+  }
+}
+
+function getCollisionNormal(
+  stoneA: ResetPhysicsStone,
+  stoneB: ResetPhysicsStone,
+  dx: number,
+  dy: number,
+  distanceSquared: number
+): ScreenPoint {
+  if (distanceSquared >= 1e-6) {
+    const distance: number = Math.sqrt(distanceSquared);
+    return {
+      x: dx / distance,
+      y: dy / distance
+    };
+  }
+
+  const fallbackX: number = stoneB.exitNormalX - stoneA.exitNormalX;
+  const fallbackY: number = stoneB.exitNormalY - stoneA.exitNormalY;
+  const fallbackLength: number = Math.hypot(fallbackX, fallbackY);
+  if (fallbackLength >= 1e-6) {
+    return {
+      x: fallbackX / fallbackLength,
+      y: fallbackY / fallbackLength
+    };
+  }
+
+  const seed: number = hashStringToUnit(`${stoneA.id}:${stoneB.id}:normal`);
+  const angle: number = seed * Math.PI * 2;
+  return {
+    x: Math.cos(angle),
+    y: Math.sin(angle)
+  };
+}
+
+function drawOnBoardResetPhysicsStones(
+  context: CanvasRenderingContext2D,
+  stones: readonly ResetPhysicsStone[]
+): void {
+  for (const stone of stones) {
+    if (!stone.isOnBoard) {
+      continue;
+    }
+
+    drawStone(context, stone.x, stone.y, stone.radius, stone.player);
+  }
+}
+
+function drawOffBoardResetPhysicsStones(
+  context: CanvasRenderingContext2D,
+  stones: readonly ResetPhysicsStone[]
+): void {
+  for (const stone of stones) {
+    if (stone.isOnBoard) {
+      continue;
+    }
+
+    const viewportX: number = stone.boardOrigin.x + stone.x;
+    const viewportY: number = stone.boardOrigin.y + stone.y;
+    context.save();
+    context.globalAlpha = stone.alpha;
+    context.translate(viewportX, viewportY);
+    context.scale(stone.scale, stone.scale);
+    context.translate(-viewportX, -viewportY);
+    drawStone(context, viewportX, viewportY, stone.radius, stone.player);
+    context.restore();
+  }
 }
 
 function resizeMainCanvas(
@@ -1434,18 +1638,6 @@ function getBoardPoint(position: Position, layout: CanvasLayout): ScreenPoint {
   };
 }
 
-function getScreenPointFromMove(
-  move: Move,
-  rect: DOMRect,
-  layout: CanvasLayout
-): ScreenPoint {
-  const point: ScreenPoint = getBoardPoint(move, layout);
-  return {
-    x: rect.left + point.x,
-    y: rect.top + point.y
-  };
-}
-
 function getBoardRectSnapshot(
   rect: DOMRect,
   layout: CanvasLayout
@@ -1481,6 +1673,61 @@ function getMaxDistanceToBoardCorners(
       Math.max(maxDistance, Math.hypot(corner.x - origin.x, corner.y - origin.y)),
     0
   );
+}
+
+function getExitSpeedForBoardPoint(
+  point: ScreenPoint,
+  normalX: number,
+  normalY: number,
+  boardSize: number,
+  radius: number
+): number {
+  const exitDistance: number = getRayExitDistanceFromBoard(
+    point,
+    normalX,
+    normalY,
+    boardSize,
+    radius
+  );
+  return Math.max(
+    RESET_MIN_EXIT_SPEED,
+    (exitDistance + radius * 2) / RESET_EXIT_TARGET_SECONDS
+  );
+}
+
+function getRayExitDistanceFromBoard(
+  point: ScreenPoint,
+  normalX: number,
+  normalY: number,
+  boardSize: number,
+  radius: number
+): number {
+  const candidates: number[] = [];
+
+  if (normalX > 0.001) {
+    candidates.push((boardSize + radius - point.x) / normalX);
+  } else if (normalX < -0.001) {
+    candidates.push((-radius - point.x) / normalX);
+  }
+
+  if (normalY > 0.001) {
+    candidates.push((boardSize + radius - point.y) / normalY);
+  } else if (normalY < -0.001) {
+    candidates.push((-radius - point.y) / normalY);
+  }
+
+  const positiveCandidates: number[] = candidates.filter(
+    (candidate: number) => candidate > 0
+  );
+  if (positiveCandidates.length === 0) {
+    return boardSize;
+  }
+
+  return Math.min(...positiveCandidates);
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function snapshotWaveHighlights(
@@ -1565,18 +1812,9 @@ function easeOutQuad(value: number): number {
   return 1 - Math.pow(1 - clamped, 2);
 }
 
-function easeOutCubic(value: number): number {
+function easeInOutSine(value: number): number {
   const clamped: number = Math.min(1, Math.max(0, value));
-  return 1 - Math.pow(1 - clamped, 3);
-}
-
-function easeInOutCubic(value: number): number {
-  const clamped: number = Math.min(1, Math.max(0, value));
-  if (clamped < 0.5) {
-    return 4 * clamped * clamped * clamped;
-  }
-
-  return 1 - Math.pow(-2 * clamped + 2, 3) / 2;
+  return (1 - Math.cos(Math.PI * clamped)) / 2;
 }
 
 function lerpPoint(

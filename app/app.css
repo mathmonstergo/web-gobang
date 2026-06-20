@@ -8,10 +8,10 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --ink: #17211b;
-  --muted-ink: #607064;
-  --jade: #1f4738;
-  --jade-soft: #dbe9df;
+  --ink: #f6f0df;
+  --muted-ink: #a9b8ae;
+  --jade: #2f8f68;
+  --jade-soft: #122a21;
   --saffron: #e5ad3d;
   --vermillion: #be4d36;
   --paper: #f5f0e4;
@@ -31,10 +31,7 @@ html {
 body {
   min-height: 100%;
   margin: 0;
-  background:
-    linear-gradient(135deg, rgba(31, 71, 56, 0.13), transparent 30%),
-    linear-gradient(225deg, rgba(190, 77, 54, 0.14), transparent 32%),
-    linear-gradient(180deg, #fbf6e9 0%, #edf4ef 58%, #f8eee4 100%);
+  background: #000000;
   color: var(--ink);
 }
 
@@ -63,10 +60,9 @@ button {
 }
 
 .play-area {
-  border: 1px solid rgba(23, 33, 27, 0.12);
-  background: rgba(255, 250, 240, 0.82);
-  box-shadow: 0 24px 70px rgba(38, 42, 34, 0.16);
-  backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 250, 240, 0.12);
+  background: rgba(5, 7, 6, 0.78);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.58);
 }
 
 .play-area {
@@ -116,7 +112,7 @@ button {
   min-height: 34px;
   align-items: center;
   gap: 6px;
-  border: 1px solid rgba(23, 33, 27, 0.12);
+  border: 1px solid rgba(255, 250, 240, 0.14);
   border-radius: 999px;
   padding: 7px 11px;
   font-size: 0.88rem;
@@ -126,17 +122,19 @@ button {
 
 .status-offline {
   background: var(--jade-soft);
-  color: var(--jade);
+  color: #9de0bf;
 }
 
 .status-black {
-  background: #151915;
+  background: #0f1210;
+  border-color: rgba(246, 240, 223, 0.16);
   color: #f6f0df;
 }
 
 .status-white {
-  background: #fffdf5;
-  color: #594d3d;
+  background: #f7f2e6;
+  border-color: rgba(255, 250, 240, 0.45);
+  color: #2d2923;
 }
 
 .board-shell {
@@ -169,7 +167,7 @@ button {
 }
 
 .board-surface:focus-visible {
-  outline: 3px solid rgba(31, 71, 56, 0.7);
+  outline: 3px solid rgba(229, 173, 61, 0.72);
   outline-offset: 5px;
 }
 
@@ -205,10 +203,10 @@ button {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border: 1px solid rgba(23, 33, 27, 0.14);
+  border: 1px solid rgba(255, 250, 240, 0.16);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.78);
-  color: var(--ink);
+  background: rgba(255, 250, 240, 0.08);
+  color: #f6f0df;
   cursor: pointer;
   font-size: 0.98rem;
   font-weight: 800;
@@ -219,14 +217,14 @@ button {
 }
 
 .control-button:hover {
-  border-color: rgba(31, 71, 56, 0.35);
-  background: #ffffff;
+  border-color: rgba(229, 173, 61, 0.42);
+  background: rgba(255, 250, 240, 0.14);
   transform: translateY(-1px);
 }
 
 .control-button:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 0.38;
   transform: none;
 }
 

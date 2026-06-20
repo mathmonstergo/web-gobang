@@ -19,6 +19,10 @@ export function GobangGame(): ReactElement {
   const winnerLabel: string | null =
     state.winner === null ? null : getPlayerLabel(state.winner.player);
   const handleReset = (): void => {
+    if (isResetPending) {
+      return;
+    }
+
     if (resetTimeoutRef.current !== null) {
       window.clearTimeout(resetTimeoutRef.current);
       resetTimeoutRef.current = null;
@@ -36,10 +40,10 @@ export function GobangGame(): ReactElement {
     }
 
     setIsResetPending(true);
+    reset();
     resetTimeoutRef.current = window.setTimeout(() => {
       resetTimeoutRef.current = null;
       setIsResetPending(false);
-      reset();
     }, delayMs);
   };
   const handleUndo = (): void => {
