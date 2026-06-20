@@ -204,3 +204,36 @@ Restored placement replay, bound reset wave visuals to physics crests, replaced 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: Unify Gobang canvas scene
+
+**Date**: 2026-06-20
+**Task**: Unify Gobang canvas scene
+**Branch**: `main`
+
+### Summary
+
+Reworked the Gobang board to use one fixed viewport canvas scene for board, stones, reset waves, physics stones, and undo cat animation. Removed portal overlay handoff, boardOrigin conversions, and added a single-canvas regression test.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8966f0b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
