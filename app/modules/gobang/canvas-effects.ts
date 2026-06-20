@@ -18,6 +18,18 @@ export type CanvasLayout = {
   padding: number;
 };
 
+export type Point2D = {
+  x: number;
+  y: number;
+};
+
+export type Rect2D = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
 export type InkPoint = {
   angle: number;
   radius: number;
@@ -30,6 +42,20 @@ export type WaveAnimation = {
   player: Player;
   highlights: readonly WaveHighlight[];
   startedAt: number;
+};
+
+export type BoardQuadrant =
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right";
+
+export type CatPawPath = {
+  quadrant: BoardQuadrant;
+  entry: Point2D;
+  target: Point2D;
+  exit: Point2D;
+  angle: number;
 };
 
 export function createWaveHighlights(
@@ -172,6 +198,63 @@ export function getWaveAnimationDuration(
       Math.max(duration, highlight.delayMs + WAVE_STONE_DURATION_MS + 80),
     0
   );
+}
+
+export function getBoardQuadrant(
+  point: Point2D,
+  center: Point2D
+): BoardQuadrant {
+  if (point.x < center.x && point.y < center.y) {
+    return "top-left";
+  }
+
+  if (point.x >= center.x && point.y < center.y) {
+    return "top-right";
+  }
+
+  if (point.x < center.x && point.y >= center.y) {
+    return "bottom-left";
+  }
+
+  return "bottom-right";
+}
+
+export function createCatPawPath(
+  target: Point2D,
+  boardRect: Rect2D,
+  radius: number
+): CatPawPath {
+  const center: Point2D = {
+    x: (boardRect.left + boardRect.right) / 2,
+    y: (boardRect.top + boardRect.bottom) / 2
+  };
+  const quadrant: BoardQuadrant = getBoardQuadrant(target, center);
+  const directionX: number =
+    quadrant === "top-left" || quadrant === "bottom-left" ? -1 : 1;
+  const directionY: number =
+    quadrant === "top-left" || quadrant === "top-right" ? -1 : 1;
+  const boardWidth: number = Math.max(1, boardRect.right - boardRect.left);
+  const boardHeight: number = Math.max(1, boardRect.bottom - boardRect.top);
+  const travel: number =
+    Math.max(boardWidth, boardHeight) * 0.46 + radius * 5.5;
+  const entry: Point2D = {
+    x: target.x + directionX * travel,
+    y: target.y + directionY * travel
+  };
+  const exit: Point2D = {
+    x: target.x + directionX * (travel + radius * 8),
+    y: target.y + directionY * (travel + radius * 8)
+  };
+  const angle: number =
+    Math.atan2(target.y - entry.y, target.x - entry.x) + Math.PI / 2;
+
+  return {
+    quadrant,
+    entry,
+    target,
+    exit,
+    angle
+  };
 }
 
 export function createInkPoints(

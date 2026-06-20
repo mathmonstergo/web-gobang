@@ -1,5 +1,5 @@
 import { RefreshCcw, Undo2 } from "lucide-react";
-import { useRef, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 
 import {
   GobangBoard,
@@ -7,24 +7,43 @@ import {
   type ScreenPoint
 } from "@/modules/gobang/components/gobang-board";
 import { useGobangGame } from "@/modules/gobang/hooks/use-gobang-game";
-import { type Move, type Player } from "@/modules/gobang/types";
+import { type Move, type Player, type Position } from "@/modules/gobang/types";
 
 export function GobangGame(): ReactElement {
   const { state, effects, placeAt, undo, reset } = useGobangGame();
   const boardRef = useRef<GobangBoardHandle | null>(null);
   const resetButtonRef = useRef<HTMLButtonElement | null>(null);
+  const resetTimeoutRef = useRef<number | null>(null);
+  const [isResetPending, setIsResetPending] = useState(false);
   const currentLabel: string = getPlayerLabel(state.currentPlayer);
   const winnerLabel: string | null =
     state.winner === null ? null : getPlayerLabel(state.winner.player);
   const handleReset = (): void => {
-    boardRef.current?.playResetAnimation(
+    if (resetTimeoutRef.current !== null) {
+      window.clearTimeout(resetTimeoutRef.current);
+      resetTimeoutRef.current = null;
+    }
+
+    const delayMs: number = boardRef.current?.playResetAnimation(
       state.moves,
       getElementCenter(resetButtonRef.current)
-    );
-    reset();
+    ) ?? 0;
+
+    if (delayMs <= 0) {
+      setIsResetPending(false);
+      reset();
+      return;
+    }
+
+    setIsResetPending(true);
+    resetTimeoutRef.current = window.setTimeout(() => {
+      resetTimeoutRef.current = null;
+      setIsResetPending(false);
+      reset();
+    }, delayMs);
   };
   const handleUndo = (): void => {
-    if (state.moves.length === 0) {
+    if (isResetPending || state.moves.length === 0) {
       return;
     }
 
@@ -32,6 +51,21 @@ export function GobangGame(): ReactElement {
     boardRef.current?.playUndoAnimation(latestMove);
     undo();
   };
+  const handlePlace = (position: Position): void => {
+    if (isResetPending) {
+      return;
+    }
+
+    placeAt(position);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (resetTimeoutRef.current !== null) {
+        window.clearTimeout(resetTimeoutRef.current);
+      }
+    };
+  }, []);
 
   return (
     <main className="app-shell">
@@ -59,7 +93,7 @@ export function GobangGame(): ReactElement {
           <GobangBoard
             ref={boardRef}
             effects={effects}
-            onPlace={placeAt}
+            onPlace={handlePlace}
             state={state}
           />
 
@@ -67,6 +101,7 @@ export function GobangGame(): ReactElement {
             <button
               ref={resetButtonRef}
               className="control-button primary"
+              disabled={isResetPending}
               onClick={handleReset}
               type="button"
             >
@@ -75,7 +110,7 @@ export function GobangGame(): ReactElement {
             </button>
             <button
               className="control-button"
-              disabled={state.moves.length === 0}
+              disabled={isResetPending || state.moves.length === 0}
               onClick={handleUndo}
               type="button"
             >

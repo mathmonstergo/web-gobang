@@ -164,6 +164,9 @@ For the Gobang board, keep game rules and rendering effects separated:
 - Wave animation events must snapshot the affected stone `turn` values as well as positions. Matching only by `{ row, col }` can make an old wave animate a new stone after undo/reset and replay.
 - Victory replay effects must compute the origin from the final placed stone when available, then render only the five-stone window containing that origin.
 - Reset and undo removal effects should copy departing stones before state rollback, then draw those copies from an internal animation/physics queue.
+- Reset shockwave removal must not hide all board stones on click. Keep stones visible at their board intersections until the shockwave reaches each copied stone, then hide that logical stone and let the copied animation/physics stone take over.
+- Pointer/touch placement must not leave keyboard focus affordances on the placed stone. Only show the dashed focus cursor after keyboard navigation, and hide it again after a successful keyboard placement.
+- Undo removal effects may hide the logical stone immediately only if the removal copy is already queued at the exact same screen coordinate. The visual removal object should own the animation until it leaves view, so fast replays or new placements do not mutate older effects.
 
 ```typescript
 type CanvasWaveHighlight = WaveHighlight & {
@@ -177,6 +180,19 @@ highlight.position.col === move.col;
 
 // Bad: a later stone on the same coordinate can inherit an old wave.
 highlight.position.row === move.row && highlight.position.col === move.col;
+```
+
+Reset handoff example:
+
+```typescript
+// Good: hide each logical stone only when its copied physics body is activated.
+if (stone.impactedAt === null && timestamp >= stone.impactAt) {
+  activatePhysicsStone(stone);
+  hiddenKeys.current.add(stone.boardKey);
+}
+
+// Bad: every stone disappears before the shockwave reaches it.
+hiddenKeys.current = new Set(moves.map((move) => positionKey(move)));
 ```
 
 @@@/section:canvas-game-animation-components

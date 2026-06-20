@@ -5,8 +5,13 @@ import { describe, expect, it } from "vitest";
 import { positionKey } from "@/modules/gobang/board-geometry";
 import {
   WAVE_STAGGER_MS,
+  createCatPawPath,
   createVictoryWaveHighlights,
-  createWaveHighlights
+  createWaveHighlights,
+  getBoardQuadrant,
+  type CatPawPath,
+  type Point2D,
+  type Rect2D
 } from "@/modules/gobang/canvas-effects";
 import { GobangBoard } from "@/modules/gobang/components/gobang-board";
 import { deriveEffects } from "@/modules/gobang/effects";
@@ -152,6 +157,41 @@ describe("GobangBoard", () => {
     expect(delayByPosition.has("7:6")).toBe(false);
     expect(delayByPosition.get("7:11")).toBe(0);
     expect(delayByPosition.get("7:7")).toBe(WAVE_STAGGER_MS * 4);
+  });
+
+  it("chooses cat paw quadrants from the removed stone position", () => {
+    const center: Point2D = { x: 100, y: 100 };
+
+    expect(getBoardQuadrant({ x: 80, y: 80 }, center)).toBe("top-left");
+    expect(getBoardQuadrant({ x: 120, y: 80 }, center)).toBe("top-right");
+    expect(getBoardQuadrant({ x: 80, y: 120 }, center)).toBe("bottom-left");
+    expect(getBoardQuadrant({ x: 120, y: 120 }, center)).toBe("bottom-right");
+  });
+
+  it("creates cat paw paths that enter and exit through the matching quadrant", () => {
+    const boardRect: Rect2D = { left: 0, top: 0, right: 300, bottom: 300 };
+    const topLeftPath: CatPawPath = createCatPawPath(
+      { x: 70, y: 60 },
+      boardRect,
+      12
+    );
+    const bottomRightPath: CatPawPath = createCatPawPath(
+      { x: 230, y: 240 },
+      boardRect,
+      12
+    );
+
+    expect(topLeftPath.quadrant).toBe("top-left");
+    expect(topLeftPath.entry.x).toBeLessThan(topLeftPath.target.x);
+    expect(topLeftPath.entry.y).toBeLessThan(topLeftPath.target.y);
+    expect(topLeftPath.exit.x).toBeLessThan(topLeftPath.entry.x);
+    expect(topLeftPath.exit.y).toBeLessThan(topLeftPath.entry.y);
+
+    expect(bottomRightPath.quadrant).toBe("bottom-right");
+    expect(bottomRightPath.entry.x).toBeGreaterThan(bottomRightPath.target.x);
+    expect(bottomRightPath.entry.y).toBeGreaterThan(bottomRightPath.target.y);
+    expect(bottomRightPath.exit.x).toBeGreaterThan(bottomRightPath.entry.x);
+    expect(bottomRightPath.exit.y).toBeGreaterThan(bottomRightPath.entry.y);
   });
 });
 

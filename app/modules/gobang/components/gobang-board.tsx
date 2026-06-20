@@ -15,11 +15,13 @@ import { BOARD_GRID_MAX, positionKey } from "@/modules/gobang/board-geometry";
 import {
   BLOOM_DURATION_MS,
   VICTORY_LOOP_MS,
+  createCatPawPath,
   createInkPoints,
   createVictoryWaveHighlights,
   createWaveHighlights,
   getWaveAnimationDuration,
   getWaveScaleFromDelay,
+  type CatPawPath,
   type CanvasLayout,
   type InkPoint
 } from "@/modules/gobang/canvas-effects";
@@ -52,7 +54,7 @@ export type GobangBoardHandle = {
   playResetAnimation: (
     moves: readonly Move[],
     origin?: ScreenPoint
-  ) => void;
+  ) => number;
   playUndoAnimation: (move: Move) => void;
 };
 
@@ -82,14 +84,12 @@ type BoardRectSnapshot = {
   bottom: number;
 };
 
-type PhysicsMode = "reset" | "undo";
-
 type PhysicsStone = {
   id: string;
   player: Player;
   body: Matter.Body;
   radius: number;
-  mode: PhysicsMode;
+  boardKey: string;
   origin: ScreenPoint;
   boardRect: BoardRectSnapshot;
   createdAt: number;
@@ -98,12 +98,12 @@ type PhysicsStone = {
   isFalling: boolean;
 };
 
-type UndoLift = {
+type CatPawRemoval = {
   id: string;
   player: Player;
   start: ScreenPoint;
   radius: number;
-  boardRect: BoardRectSnapshot;
+  path: CatPawPath;
   startedAt: number;
 };
 
@@ -127,7 +127,11 @@ const STAR_POINTS: readonly Position[] = [
 ];
 const EMPTY_LAYOUT: CanvasLayout = { size: 0, cellSize: 0, padding: 0 };
 const STONE_RADIUS_RATIO = 0.43;
-const UNDO_LIFT_DURATION_MS = 360;
+const CAT_PAW_APPROACH_MS = 380;
+const CAT_PAW_GRAB_MS = 160;
+const CAT_PAW_CARRY_MS = 560;
+const CAT_PAW_TOTAL_MS =
+  CAT_PAW_APPROACH_MS + CAT_PAW_GRAB_MS + CAT_PAW_CARRY_MS;
 const RESET_RING_SPEED = 850;
 const PHYSICS_MAX_LIFE_MS = 6500;
 const DEVICE_PIXEL_RATIO_CAP = 2;
@@ -145,10 +149,11 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
     const cursorRef = useRef<Position>({ row: 7, col: 7 });
     const hoverRef = useRef<Position | null>(null);
     const isFocusedRef = useRef(false);
+    const isKeyboardCursorVisibleRef = useRef(false);
     const bloomsRef = useRef<BloomAnimation[]>([]);
     const wavesRef = useRef<CanvasWaveAnimation[]>([]);
     const physicsStonesRef = useRef<PhysicsStone[]>([]);
-    const undoLiftsRef = useRef<UndoLift[]>([]);
+    const catPawRemovalsRef = useRef<CatPawRemoval[]>([]);
     const ringsRef = useRef<RingAnimation[]>([]);
     const hiddenKeysRef = useRef<Set<string>>(new Set());
     const seenPlacementIdsRef = useRef<Set<string>>(new Set());
@@ -167,20 +172,20 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
     }, []);
 
     const playResetAnimation = useCallback(
-      (moves: readonly Move[], origin?: ScreenPoint): void => {
+      (moves: readonly Move[], origin?: ScreenPoint): number => {
         if (moves.length === 0) {
-          return;
+          return 0;
         }
 
         const canvas: HTMLCanvasElement | null = mainCanvasRef.current;
         if (canvas === null) {
-          return;
+          return 0;
         }
 
         const rect: DOMRect = canvas.getBoundingClientRect();
         const layout: CanvasLayout = layoutRef.current;
         if (layout.size <= 0 || layout.cellSize <= 0) {
-          return;
+          return 0;
         }
 
         const boardRect: BoardRectSnapshot = getBoardRectSnapshot(rect, layout);
@@ -193,9 +198,9 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
 
         bloomsRef.current = [];
         wavesRef.current = [];
-        hiddenKeysRef.current = new Set<string>(
-          moves.map((move: Move) => positionKey(move))
-        );
+        hiddenKeysRef.current.clear();
+        clearResetPhysics(engineRef, physicsStonesRef);
+        ringsRef.current = [];
         ringsRef.current.push({
           id: createAnimationId("reset-ring"),
           origin: shockOrigin,
@@ -204,12 +209,14 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
         });
 
         const engine: Matter.Engine = getPhysicsEngine(engineRef);
+        let maxImpactDelay = 0;
         for (const move of moves) {
           const point: ScreenPoint = getScreenPointFromMove(move, rect, layout);
           const distance: number = Math.max(
             1,
             Math.hypot(point.x - shockOrigin.x, point.y - shockOrigin.y)
           );
+          const impactDelay: number = (distance / RESET_RING_SPEED) * 1000;
           const body: Matter.Body = Matter.Bodies.circle(
             point.x,
             point.y,
@@ -230,15 +237,18 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
             player: move.player,
             body,
             radius,
-            mode: "reset",
+            boardKey: positionKey(move),
             origin: shockOrigin,
             boardRect,
             createdAt: now,
-            impactAt: now + (distance / RESET_RING_SPEED) * 1000,
+            impactAt: now + impactDelay,
             impactedAt: null,
             isFalling: false
           });
+          maxImpactDelay = Math.max(maxImpactDelay, impactDelay);
         }
+
+        return maxImpactDelay + 140;
       },
       [createAnimationId]
     );
@@ -256,13 +266,16 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           return;
         }
 
+        const boardRect: BoardRectSnapshot = getBoardRectSnapshot(rect, layout);
+        const start: ScreenPoint = getScreenPointFromMove(move, rect, layout);
+        const radius: number = layout.cellSize * STONE_RADIUS_RATIO;
         hiddenKeysRef.current.add(positionKey(move));
-        undoLiftsRef.current.push({
-          id: createAnimationId("undo-lift"),
+        catPawRemovalsRef.current.push({
+          id: createAnimationId("cat-paw"),
           player: move.player,
-          start: getScreenPointFromMove(move, rect, layout),
-          radius: layout.cellSize * STONE_RADIUS_RATIO,
-          boardRect: getBoardRectSnapshot(rect, layout),
+          start,
+          radius,
+          path: createCatPawPath(start, boardRect, radius),
           startedAt: performance.now()
         });
       },
@@ -422,6 +435,7 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           cursor: cursorRef.current,
           hover: hoverRef.current,
           isFocused: isFocusedRef.current,
+          isKeyboardCursorVisible: isKeyboardCursorVisibleRef.current,
           bloomsRef,
           wavesRef,
           hiddenKeysRef,
@@ -431,8 +445,9 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           canvas: overlay,
           engineRef,
           physicsStonesRef,
-          undoLiftsRef,
+          catPawRemovalsRef,
           ringsRef,
+          hiddenKeysRef,
           timestamp,
           deltaMs
         });
@@ -472,6 +487,7 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
       }
 
       cursorRef.current = position;
+      isKeyboardCursorVisibleRef.current = false;
       setRenderTick((value: number) => value + 1);
       onPlace(position);
     };
@@ -520,7 +536,13 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
 
       if ((event.key === "Enter" || event.key === " ") && state.status === "playing") {
         event.preventDefault();
-        onPlace(cursorRef.current);
+        const cursor: Position = cursorRef.current;
+        const cell: Player | null | undefined = state.board[cursor.row]?.[cursor.col];
+        if (cell === null) {
+          isKeyboardCursorVisibleRef.current = false;
+          setRenderTick((value: number) => value + 1);
+        }
+        onPlace(cursor);
       }
     };
 
@@ -529,6 +551,7 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
         row: clampBoardIndex(position.row),
         col: clampBoardIndex(position.col)
       };
+      isKeyboardCursorVisibleRef.current = true;
       setRenderTick((value: number) => value + 1);
     };
 
@@ -577,6 +600,7 @@ type DrawMainCanvasInput = {
   cursor: Position;
   hover: Position | null;
   isFocused: boolean;
+  isKeyboardCursorVisible: boolean;
   bloomsRef: WritableRef<BloomAnimation[]>;
   wavesRef: WritableRef<CanvasWaveAnimation[]>;
   hiddenKeysRef: WritableRef<Set<string>>;
@@ -587,8 +611,9 @@ type DrawOverlayCanvasInput = {
   canvas: HTMLCanvasElement;
   engineRef: WritableRef<Matter.Engine | null>;
   physicsStonesRef: WritableRef<PhysicsStone[]>;
-  undoLiftsRef: WritableRef<UndoLift[]>;
+  catPawRemovalsRef: WritableRef<CatPawRemoval[]>;
   ringsRef: WritableRef<RingAnimation[]>;
+  hiddenKeysRef: WritableRef<Set<string>>;
   timestamp: number;
   deltaMs: number;
 };
@@ -628,7 +653,12 @@ function drawMainCanvas(input: DrawMainCanvasInput): void {
 
   drawLastMoveMarker(context, input.state, input.hiddenKeysRef.current, layout);
   drawHoverStone(context, input.state, input.hover, layout);
-  drawFocusCursor(context, input.cursor, input.isFocused, layout);
+  drawFocusCursor(
+    context,
+    input.cursor,
+    input.isFocused && input.isKeyboardCursorVisible,
+    layout
+  );
 
   input.bloomsRef.current = input.bloomsRef.current.filter(
     (bloom: BloomAnimation) => {
@@ -662,14 +692,18 @@ function drawOverlayCanvas(input: DrawOverlayCanvasInput): void {
   context.clearRect(0, 0, width, height);
 
   drawResetRings(context, input.ringsRef, input.timestamp);
-  drawUndoLifts({
+  drawCatPawRemovals({
     context,
-    engineRef: input.engineRef,
-    physicsStonesRef: input.physicsStonesRef,
-    undoLiftsRef: input.undoLiftsRef,
+    catPawRemovalsRef: input.catPawRemovalsRef,
     timestamp: input.timestamp
   });
-  updatePhysicsStones(input.engineRef, input.physicsStonesRef, input.timestamp, input.deltaMs);
+  updatePhysicsStones(
+    input.engineRef,
+    input.physicsStonesRef,
+    input.hiddenKeysRef,
+    input.timestamp,
+    input.deltaMs
+  );
   drawPhysicsStones(context, input.physicsStonesRef.current, input.timestamp);
 }
 
@@ -1036,96 +1070,181 @@ function drawResetRings(
   });
 }
 
-type DrawUndoLiftsInput = {
+type DrawCatPawRemovalsInput = {
   context: CanvasRenderingContext2D;
-  engineRef: WritableRef<Matter.Engine | null>;
-  physicsStonesRef: WritableRef<PhysicsStone[]>;
-  undoLiftsRef: WritableRef<UndoLift[]>;
+  catPawRemovalsRef: WritableRef<CatPawRemoval[]>;
   timestamp: number;
 };
 
-function drawUndoLifts(input: DrawUndoLiftsInput): void {
-  const activeLifts: UndoLift[] = [];
+function drawCatPawRemovals(input: DrawCatPawRemovalsInput): void {
+  const activeRemovals: CatPawRemoval[] = [];
 
-  for (const lift of input.undoLiftsRef.current) {
-    const progress: number = Math.min(
-      1,
-      (input.timestamp - lift.startedAt) / UNDO_LIFT_DURATION_MS
-    );
-
-    if (progress >= 1) {
-      launchUndoStone(input.engineRef, input.physicsStonesRef, lift, input.timestamp);
+  for (const removal of input.catPawRemovalsRef.current) {
+    const age: number = input.timestamp - removal.startedAt;
+    if (age >= CAT_PAW_TOTAL_MS) {
       continue;
     }
 
-    const eased: number = easeOutQuad(progress);
-    const x: number = lift.start.x;
-    const y: number = lift.start.y - eased * lift.radius * 4.6;
-    const scale: number = 1 + eased * 0.22;
-    input.context.save();
-    input.context.translate(x, y);
-    input.context.scale(scale, scale);
-    input.context.translate(-x, -y);
-    drawStone(input.context, x, y, lift.radius, lift.player);
-    input.context.restore();
-    activeLifts.push(lift);
+    drawCatPawRemoval(input.context, removal, age);
+    activeRemovals.push(removal);
   }
 
-  input.undoLiftsRef.current = activeLifts;
+  input.catPawRemovalsRef.current = activeRemovals;
 }
 
-function launchUndoStone(
-  engineRef: WritableRef<Matter.Engine | null>,
-  physicsStonesRef: WritableRef<PhysicsStone[]>,
-  lift: UndoLift,
-  timestamp: number
+function drawCatPawRemoval(
+  context: CanvasRenderingContext2D,
+  removal: CatPawRemoval,
+  age: number
 ): void {
-  const engine: Matter.Engine = getPhysicsEngine(engineRef);
-  const launchPoint: ScreenPoint = {
-    x: lift.start.x,
-    y: lift.start.y - lift.radius * 4.6
-  };
-  const boardCenter: ScreenPoint = getBoardCenterFromRect(lift.boardRect);
-  const directionX: number = launchPoint.x < boardCenter.x ? -1 : 1;
-  const verticalBias: number = launchPoint.y < boardCenter.y ? -3.8 : -6.2;
-  const body: Matter.Body = Matter.Bodies.circle(
-    launchPoint.x,
-    launchPoint.y,
-    lift.radius,
-    {
-      density: 0.004,
-      friction: 0.04,
-      frictionAir: 0.006,
-      restitution: 0.74
-    },
-    32
+  const path: CatPawPath = removal.path;
+  const approachProgress: number = easeOutCubic(
+    Math.min(1, age / CAT_PAW_APPROACH_MS)
   );
+  const grabAge: number = age - CAT_PAW_APPROACH_MS;
+  const carryAge: number = age - CAT_PAW_APPROACH_MS - CAT_PAW_GRAB_MS;
+  const isCarrying: boolean = carryAge > 0;
+  const carryProgress: number = isCarrying
+    ? easeInOutCubic(Math.min(1, carryAge / CAT_PAW_CARRY_MS))
+    : 0;
+  const pawPoint: ScreenPoint = isCarrying
+    ? lerpPoint(path.target, path.exit, carryProgress)
+    : lerpPoint(path.entry, path.target, approachProgress);
+  const stonePoint: ScreenPoint = isCarrying
+    ? getCarriedStonePoint(pawPoint, removal.radius, path.angle)
+    : removal.start;
+  const grabProgress: number =
+    grabAge <= 0 ? 0 : easeOutQuad(Math.min(1, grabAge / CAT_PAW_GRAB_MS));
+  const pawScale: number =
+    0.88 + approachProgress * 0.12 + Math.sin(grabProgress * Math.PI) * 0.08;
+  const stoneScale: number = isCarrying
+    ? 1 - carryProgress * 0.18
+    : 1 + Math.sin(grabProgress * Math.PI) * 0.08;
+  const fade: number = isCarrying && carryProgress > 0.72
+    ? Math.max(0, 1 - (carryProgress - 0.72) / 0.28)
+    : 1;
 
-  Matter.Composite.add(engine.world, body);
-  Matter.Body.setVelocity(body, {
-    x: directionX * 15.5,
-    y: verticalBias
-  });
-  Matter.Body.setAngularVelocity(body, directionX * 0.26);
+  context.save();
+  context.globalAlpha = fade;
+  context.translate(stonePoint.x, stonePoint.y);
+  context.scale(stoneScale, stoneScale);
+  drawStone(context, 0, 0, removal.radius, removal.player);
+  context.restore();
 
-  physicsStonesRef.current.push({
-    id: lift.id,
-    player: lift.player,
-    body,
-    radius: lift.radius,
-    mode: "undo",
-    origin: boardCenter,
-    boardRect: lift.boardRect,
-    createdAt: timestamp,
-    impactAt: timestamp,
-    impactedAt: timestamp,
-    isFalling: false
-  });
+  context.save();
+  context.globalAlpha = fade;
+  context.translate(pawPoint.x, pawPoint.y);
+  context.rotate(path.angle);
+  context.scale(pawScale, pawScale);
+  drawCatPaw(context, removal.radius);
+  context.restore();
+}
+
+function drawCatPaw(
+  context: CanvasRenderingContext2D,
+  stoneRadius: number
+): void {
+  const pawRadius: number = stoneRadius * 1.25;
+  context.save();
+  context.shadowColor = "rgba(18, 10, 4, 0.28)";
+  context.shadowBlur = pawRadius * 0.32;
+  context.shadowOffsetY = pawRadius * 0.12;
+
+  const furGradient: CanvasGradient = context.createLinearGradient(
+    0,
+    -pawRadius * 2.1,
+    0,
+    pawRadius * 1.8
+  );
+  furGradient.addColorStop(0, "#fff1dc");
+  furGradient.addColorStop(0.55, "#e7b883");
+  furGradient.addColorStop(1, "#b87846");
+  context.fillStyle = furGradient;
+  context.beginPath();
+  context.roundRect(
+    -pawRadius * 0.48,
+    -pawRadius * 2.5,
+    pawRadius * 0.96,
+    pawRadius * 3.1,
+    pawRadius * 0.42
+  );
+  context.fill();
+
+  context.shadowColor = "transparent";
+  context.shadowBlur = 0;
+  context.shadowOffsetY = 0;
+  context.fillStyle = "#f1bf91";
+  context.beginPath();
+  context.ellipse(0, 0, pawRadius * 0.72, pawRadius * 0.58, 0, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = "#f6d0b0";
+  const toePads: readonly ScreenPoint[] = [
+    { x: -pawRadius * 0.58, y: -pawRadius * 0.82 },
+    { x: -pawRadius * 0.2, y: -pawRadius * 1.04 },
+    { x: pawRadius * 0.2, y: -pawRadius * 1.04 },
+    { x: pawRadius * 0.58, y: -pawRadius * 0.82 }
+  ];
+
+  for (const toe of toePads) {
+    context.beginPath();
+    context.ellipse(
+      toe.x,
+      toe.y,
+      pawRadius * 0.24,
+      pawRadius * 0.32,
+      toe.x * 0.004,
+      0,
+      Math.PI * 2
+    );
+    context.fill();
+  }
+
+  context.fillStyle = "rgba(255, 255, 255, 0.24)";
+  context.beginPath();
+  context.ellipse(
+    -pawRadius * 0.18,
+    -pawRadius * 1.82,
+    pawRadius * 0.16,
+    pawRadius * 0.5,
+    -0.18,
+    0,
+    Math.PI * 2
+  );
+  context.fill();
+  context.restore();
+}
+
+function getCarriedStonePoint(
+  pawPoint: ScreenPoint,
+  stoneRadius: number,
+  angle: number
+): ScreenPoint {
+  const offset: number = stoneRadius * 0.24;
+  return {
+    x: pawPoint.x + Math.sin(angle) * offset,
+    y: pawPoint.y - Math.cos(angle) * offset
+  };
+}
+
+function clearResetPhysics(
+  engineRef: WritableRef<Matter.Engine | null>,
+  physicsStonesRef: WritableRef<PhysicsStone[]>
+): void {
+  const engine: Matter.Engine | null = engineRef.current;
+  if (engine !== null) {
+    for (const stone of physicsStonesRef.current) {
+      Matter.Composite.remove(engine.world, stone.body);
+    }
+  }
+
+  physicsStonesRef.current = [];
 }
 
 function updatePhysicsStones(
   engineRef: WritableRef<Matter.Engine | null>,
   physicsStonesRef: WritableRef<PhysicsStone[]>,
+  hiddenKeysRef: WritableRef<Set<string>>,
   timestamp: number,
   deltaMs: number
 ): void {
@@ -1136,8 +1255,9 @@ function updatePhysicsStones(
   const engine: Matter.Engine = getPhysicsEngine(engineRef);
 
   for (const stone of physicsStonesRef.current) {
-    if (stone.mode === "reset" && stone.impactedAt === null && timestamp >= stone.impactAt) {
+    if (stone.impactedAt === null && timestamp >= stone.impactAt) {
       impactResetStone(stone, timestamp);
+      hiddenKeysRef.current.add(stone.boardKey);
     }
   }
 
@@ -1216,9 +1336,12 @@ function drawPhysicsStones(
   timestamp: number
 ): void {
   for (const stone of stones) {
+    if (stone.impactedAt === null) {
+      continue;
+    }
+
     const position = stone.body.position;
-    const impactAge: number =
-      stone.impactedAt === null ? -1 : timestamp - stone.impactedAt;
+    const impactAge: number = timestamp - stone.impactedAt;
     const impactScale: number =
       impactAge >= 0 && impactAge < 120
         ? 1 + 0.38 * Math.sin((impactAge / 120) * Math.PI)
@@ -1440,6 +1563,31 @@ function getDevicePixelRatio(): number {
 function easeOutQuad(value: number): number {
   const clamped: number = Math.min(1, Math.max(0, value));
   return 1 - Math.pow(1 - clamped, 2);
+}
+
+function easeOutCubic(value: number): number {
+  const clamped: number = Math.min(1, Math.max(0, value));
+  return 1 - Math.pow(1 - clamped, 3);
+}
+
+function easeInOutCubic(value: number): number {
+  const clamped: number = Math.min(1, Math.max(0, value));
+  if (clamped < 0.5) {
+    return 4 * clamped * clamped * clamped;
+  }
+
+  return 1 - Math.pow(-2 * clamped + 2, 3) / 2;
+}
+
+function lerpPoint(
+  start: ScreenPoint,
+  end: ScreenPoint,
+  progress: number
+): ScreenPoint {
+  return {
+    x: start.x + (end.x - start.x) * progress,
+    y: start.y + (end.y - start.y) * progress
+  };
 }
 
 function hashStringToUnit(value: string): number {
