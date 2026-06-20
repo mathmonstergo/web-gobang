@@ -1,15 +1,37 @@
 import { RefreshCcw, Undo2 } from "lucide-react";
-import { type ReactElement } from "react";
+import { useRef, type ReactElement } from "react";
 
-import { GobangBoard } from "@/modules/gobang/components/gobang-board";
+import {
+  GobangBoard,
+  type GobangBoardHandle,
+  type ScreenPoint
+} from "@/modules/gobang/components/gobang-board";
 import { useGobangGame } from "@/modules/gobang/hooks/use-gobang-game";
-import { type Player } from "@/modules/gobang/types";
+import { type Move, type Player } from "@/modules/gobang/types";
 
 export function GobangGame(): ReactElement {
   const { state, effects, placeAt, undo, reset } = useGobangGame();
+  const boardRef = useRef<GobangBoardHandle | null>(null);
+  const resetButtonRef = useRef<HTMLButtonElement | null>(null);
   const currentLabel: string = getPlayerLabel(state.currentPlayer);
   const winnerLabel: string | null =
     state.winner === null ? null : getPlayerLabel(state.winner.player);
+  const handleReset = (): void => {
+    boardRef.current?.playResetAnimation(
+      state.moves,
+      getElementCenter(resetButtonRef.current)
+    );
+    reset();
+  };
+  const handleUndo = (): void => {
+    if (state.moves.length === 0) {
+      return;
+    }
+
+    const latestMove: Move = state.moves[state.moves.length - 1];
+    boardRef.current?.playUndoAnimation(latestMove);
+    undo();
+  };
 
   return (
     <main className="app-shell">
@@ -34,12 +56,18 @@ export function GobangGame(): ReactElement {
             </div>
           </header>
 
-          <GobangBoard effects={effects} onPlace={placeAt} state={state} />
+          <GobangBoard
+            ref={boardRef}
+            effects={effects}
+            onPlace={placeAt}
+            state={state}
+          />
 
           <div className="controls" aria-label="游戏控制">
             <button
+              ref={resetButtonRef}
               className="control-button primary"
-              onClick={reset}
+              onClick={handleReset}
               type="button"
             >
               <RefreshCcw aria-hidden="true" size={18} />
@@ -48,7 +76,7 @@ export function GobangGame(): ReactElement {
             <button
               className="control-button"
               disabled={state.moves.length === 0}
-              onClick={undo}
+              onClick={handleUndo}
               type="button"
             >
               <Undo2 aria-hidden="true" size={18} />
@@ -63,4 +91,16 @@ export function GobangGame(): ReactElement {
 
 function getPlayerLabel(player: Player): string {
   return player === "black" ? "黑棋" : "白棋";
+}
+
+function getElementCenter(element: HTMLElement | null): ScreenPoint | undefined {
+  if (element === null) {
+    return undefined;
+  }
+
+  const rect: DOMRect = element.getBoundingClientRect();
+  return {
+    x: rect.left + rect.width / 2,
+    y: rect.top + rect.height / 2
+  };
 }

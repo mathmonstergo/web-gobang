@@ -153,6 +153,34 @@ Use proper HTML elements:
 
 @@@/section:semantic-html
 
+@@@section:canvas-game-animation-components
+
+### Canvas Game Animation Components
+
+For the Gobang board, keep game rules and rendering effects separated:
+
+- Game rules stay in `app/modules/gobang/game-logic.ts` and hooks.
+- Canvas components may snapshot move data for animation, but must not mutate game state directly.
+- Wave animation events must snapshot the affected stone `turn` values as well as positions. Matching only by `{ row, col }` can make an old wave animate a new stone after undo/reset and replay.
+- Victory replay effects must compute the origin from the final placed stone when available, then render only the five-stone window containing that origin.
+- Reset and undo removal effects should copy departing stones before state rollback, then draw those copies from an internal animation/physics queue.
+
+```typescript
+type CanvasWaveHighlight = WaveHighlight & {
+  turn: number;
+};
+
+// Good: old effects only affect the original move.
+highlight.turn === move.turn &&
+highlight.position.row === move.row &&
+highlight.position.col === move.col;
+
+// Bad: a later stone on the same coordinate can inherit an old wave.
+highlight.position.row === move.row && highlight.position.col === move.col;
+```
+
+@@@/section:canvas-game-animation-components
+
 @@@section:react-markdown-custom-components
 
 ### React-Markdown Custom Components

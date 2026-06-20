@@ -1,7 +1,7 @@
 export const BOARD_SIZE = 15;
 export const WIN_LENGTH = 5;
-export const WAVE_DELAY_PER_STEP_MS = 220;
-export const WAVE_DURATION_MS = 720;
+export const WAVE_DELAY_PER_STEP_MS = 125;
+export const WAVE_DURATION_MS = 360;
 
 export type Player = "black" | "white";
 
