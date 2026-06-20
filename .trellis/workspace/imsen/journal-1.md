@@ -171,3 +171,36 @@ Reworked New Game removal into single-wave frictionless elastic stone motion, re
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Fix reset wave handoff
+
+**Date**: 2026-06-20
+**Task**: Fix reset wave handoff
+**Branch**: `main`
+
+### Summary
+
+Restored placement replay, bound reset wave visuals to physics crests, replaced undo removal with cat swat animation, removed unused Matter dependencies, and fixed New Game impact left-shift by keeping reset stones on the board canvas until they leave the board.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e9a4d6b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
+- **Total Sessions**: 6
 - **Last Active**: 2026-06-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~173 | Active |
+| `journal-1.md` | ~206 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-06-20 | Fix reset wave handoff | `e9a4d6b` | `main` |
 | 5 | 2026-06-20 | Refine gobang reset physics | `7d7d79f` | `main` |
 | 4 | 2026-06-20 | Refine Gobang removal effects | `025a92b` | `main` |
 | 3 | 2026-06-20 | Full canvas Gobang board | `787ca61` | `main` |
