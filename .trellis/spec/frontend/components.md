@@ -162,11 +162,47 @@ For the Gobang board, keep game rules and rendering effects separated:
 - Game rules stay in `app/modules/gobang/game-logic.ts` and hooks.
 - Canvas components may snapshot move data for animation, but must not mutate game state directly.
 - Wave animation events must snapshot the affected stone `turn` values as well as positions. Matching only by `{ row, col }` can make an old wave animate a new stone after undo/reset and replay.
+- Repeating wave timers must store a replay snapshot that includes the latest
+  move's `turn` and `positionKey`. Timer callbacks must re-check that the
+  current last move still matches that identity and filter highlights against
+  current `state.moves` before enqueueing a canvas wave.
+- Clear placement replay timers before scheduling a replacement and when undo,
+  reset, victory, or unmount supersedes the current latest move. Undo should
+  expose the remaining latest move to the effects layer so a valid 3/4/5 shape
+  can regain its delayed replay schedule.
+- Actual placement effects need a unique event id, not only
+  `turn-player-row-col`. After undo, the same turn and coordinate can be played
+  again; a deterministic id will be swallowed by `seenPlacementIds` and lose the
+  placement bloom.
+- Undo-restored latest moves should be marked replay-only. They can restore the
+  delayed wave replay schedule, but should not replay the placement bloom or an
+  immediate placement wave.
 - Victory replay effects must compute the origin from the final placed stone when available, then render only the five-stone window containing that origin.
 - Reset and undo removal effects should copy departing stones before state rollback, then draw those copies from an internal animation/physics queue.
 - Reset shockwave removal must not hide all board stones on click. Keep stones visible at their board intersections until the shockwave reaches each copied stone, then hide that logical stone and let the copied animation/physics stone take over.
+- Reset wave visuals and physics impulses must be modeled as the same crest
+  events. Do not draw extra visual-only rings inside one event; compute the
+  minimum crest count from required departure impulse and schedule one matching
+  physical impulse per stone for each visible crest.
+- Copied reset stones must render on the board canvas while `isOnBoard` is
+  true, including after a reset crest activates their physics velocity. Moving
+  an activated reset stone from board canvas coordinates to full-viewport
+  overlay coordinates at impact creates a visible lateral jump. Render reset
+  stones on the overlay only after they have fully left the board and are in
+  the falling/depth phase.
+- Copied undo/swat stones may render on the full-viewport overlay immediately
+  because the cat effect owns their visual continuity from the swat moment.
+- Later reset crest impacts must be checked against each moving stone's current
+  viewport position. Precomputing `startedAt + initialDistance / speed` makes a
+  second crest affect a stone before the visible wave reaches it.
+- New Game should use a short interaction lock that covers the handoff into the
+  reset animation. Do not block fresh placement until all old copied stones have
+  completed their full fall/fade animation.
 - Pointer/touch placement must not leave keyboard focus affordances on the placed stone. Only show the dashed focus cursor after keyboard navigation, and hide it again after a successful keyboard placement.
 - Undo removal effects may hide the logical stone immediately only if the removal copy is already queued at the exact same screen coordinate. The visual removal object should own the animation until it leaves view, so fast replays or new placements do not mutate older effects.
+- Testable helpers used by canvas components should live in non-component module
+  files. Exporting helpers from a `.tsx` component file can trip
+  `react-refresh/only-export-components`.
 
 ```typescript
 type CanvasWaveHighlight = WaveHighlight & {
@@ -180,6 +216,19 @@ highlight.position.col === move.col;
 
 // Bad: a later stone on the same coordinate can inherit an old wave.
 highlight.position.row === move.row && highlight.position.col === move.col;
+```
+
+Replay timer example:
+
+```typescript
+// Good: timer callback validates the replay is still for the current last move.
+const latestMove = state.moves[state.moves.length - 1];
+if (latestMove.turn !== replay.turn || positionKey(latestMove) !== replay.moveKey) {
+  return;
+}
+
+// Bad: a stale timeout blindly pushes an old wave after undo/reset.
+wavesRef.current.push(replay.wave);
 ```
 
 Reset handoff example:

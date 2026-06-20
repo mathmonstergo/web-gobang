@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { deriveEffects } from "@/modules/gobang/effects";
 import {
@@ -14,6 +14,7 @@ import {
 import {
   type DerivedEffects,
   type GameState,
+  type Move,
   type PlacementEffect,
   type Position
 } from "@/modules/gobang/types";
@@ -32,6 +33,7 @@ export function useGobangGame(): GobangController {
   const [latestPlacement, setLatestPlacement] =
     useState<PlacementEffect | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const placementEffectSequenceRef = useRef(0);
 
   useEffect(() => {
     const storedState: GameState | null = loadStoredGameState();
@@ -57,20 +59,38 @@ export function useGobangGame(): GobangController {
         return previousState;
       }
 
-      setLatestPlacement({
-        id: `${result.move.turn}-${result.move.player}-${result.move.row}-${result.move.col}`,
-        player: result.move.player,
-        position: { row: result.move.row, col: result.move.col },
-        turn: result.move.turn
-      });
+      placementEffectSequenceRef.current += 1;
+      setLatestPlacement(
+        createPlacementEffectFromMove(
+          result.move,
+          `place-${placementEffectSequenceRef.current}`
+        )
+      );
 
       return result.state;
     });
   }, []);
 
   const undo = useCallback((): void => {
-    setLatestPlacement(null);
-    setState((previousState: GameState) => undoMove(previousState));
+    setState((previousState: GameState) => {
+      const nextState: GameState = undoMove(previousState);
+      if (nextState.moves.length === 0) {
+        setLatestPlacement(null);
+        return nextState;
+      }
+
+      const latestMove: Move = nextState.moves[nextState.moves.length - 1];
+      placementEffectSequenceRef.current += 1;
+      setLatestPlacement(
+        createPlacementEffectFromMove(
+          latestMove,
+          `replay-${placementEffectSequenceRef.current}`,
+          true
+        )
+      );
+
+      return nextState;
+    });
   }, []);
 
   const reset = useCallback((): void => {
@@ -91,5 +111,19 @@ export function useGobangGame(): GobangController {
     placeAt,
     undo,
     reset
+  };
+}
+
+function createPlacementEffectFromMove(
+  move: Move,
+  idSuffix: string,
+  replayOnly = false
+): PlacementEffect {
+  return {
+    id: `${move.turn}-${move.player}-${move.row}-${move.col}-${idSuffix}`,
+    player: move.player,
+    position: { row: move.row, col: move.col },
+    turn: move.turn,
+    replayOnly
   };
 }

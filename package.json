@@ -16,14 +16,12 @@
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
-    "matter-js": "^0.20.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
     "@tailwindcss/vite": "^4.0.0",
-    "@types/matter-js": "^0.20.2",
     "@types/node": "^24.13.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

@@ -84,6 +84,7 @@ export type PlacementEffect = {
   player: Player;
   position: Position;
   turn: number;
+  replayOnly?: boolean;
 };
 
 export type DerivedEffects = {

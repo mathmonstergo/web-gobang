@@ -16,6 +16,7 @@ import {
 import { GobangBoard } from "@/modules/gobang/components/gobang-board";
 import { deriveEffects } from "@/modules/gobang/effects";
 import { createInitialState, createStateFromMoves } from "@/modules/gobang/game-logic";
+import { getResetWaveCrestCount } from "@/modules/gobang/reset-physics";
 import {
   type GameState,
   type Move,
@@ -37,6 +38,14 @@ describe("GobangBoard", () => {
     expect(markup).toContain("board-canvas");
     expect(markup).not.toContain("<svg");
     expect(markup).not.toContain("stone-victory-wave");
+  });
+
+  it("uses the minimum reset wave crest count for an impulse cap", () => {
+    expect(getResetWaveCrestCount(0, 460)).toBe(1);
+    expect(getResetWaveCrestCount(460, 460)).toBe(1);
+    expect(getResetWaveCrestCount(461, 460)).toBe(2);
+    expect(getResetWaveCrestCount(920, 460)).toBe(2);
+    expect(getResetWaveCrestCount(921, 460)).toBe(3);
   });
 
   it("keeps victory replay anchored to a final endpoint stone", () => {
