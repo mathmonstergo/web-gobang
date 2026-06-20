@@ -138,3 +138,36 @@ Fixed reset shockwave handoff, removed persistent focus cursor after placement, 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: Refine gobang reset physics
+
+**Date**: 2026-06-20
+**Task**: Refine gobang reset physics
+**Branch**: `main`
+
+### Summary
+
+Reworked New Game removal into single-wave frictionless elastic stone motion, removed reset spin, added black-background UI contrast, and kept undo cat-paw removal opaque.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7d7d79f` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
