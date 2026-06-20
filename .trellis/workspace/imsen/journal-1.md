@@ -72,3 +72,36 @@ Changed Gobang pattern hints from persistent static three-line hints to temporar
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Full canvas Gobang board
+
+**Date**: 2026-06-20
+**Task**: Full canvas Gobang board
+**Branch**: `main`
+
+### Summary
+
+Migrated Gobang board to a full-canvas renderer, restored prototype motion timing, added Matter.js reset and undo physics, and updated tests/specs.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `787ca61` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
