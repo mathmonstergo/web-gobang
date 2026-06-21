@@ -834,8 +834,6 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
     const handlePointerDown = (
       event: PointerEvent<HTMLDivElement>
     ): void => {
-      event.currentTarget.focus();
-
       if (state.status !== "playing") {
         return;
       }

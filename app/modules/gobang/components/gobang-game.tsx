@@ -109,7 +109,7 @@ export function GobangGame(): ReactElement {
               onClick={handleReset}
               type="button"
             >
-              <RefreshCcw aria-hidden="true" size={18} />
+              <RefreshCcw aria-hidden="true" size={16} />
               新局
             </button>
             <button
@@ -118,8 +118,8 @@ export function GobangGame(): ReactElement {
               onClick={handleUndo}
               type="button"
             >
-              <Undo2 aria-hidden="true" size={18} />
-              悔棋
+              <Undo2 aria-hidden="true" size={16} />
+              耍赖皮
             </button>
           </div>
         </div>

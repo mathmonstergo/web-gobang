@@ -25,7 +25,6 @@
 
 html {
   min-height: 100%;
-  scrollbar-gutter: stable;
 }
 
 body {
@@ -57,6 +56,7 @@ button {
   grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   align-items: stretch;
+  justify-items: center;
 }
 
 .play-area {
@@ -67,6 +67,7 @@ button {
 
 .play-area {
   display: grid;
+  width: 100%;
   gap: 16px;
   justify-items: center;
   border-radius: 24px;
@@ -143,6 +144,8 @@ button {
   width: min(100%, 620px, calc(100dvh - 190px));
   min-width: 280px;
   aspect-ratio: 1 / 1;
+  justify-self: center;
+  margin-inline: auto;
 }
 
 .board-surface {
@@ -159,11 +162,6 @@ button {
   -webkit-touch-callout: none;
 }
 
-.board-surface:focus-visible {
-  outline: 3px solid rgba(229, 173, 61, 0.72);
-  outline-offset: 5px;
-}
-
 .board-canvas {
   position: fixed;
   inset: 0;
@@ -177,26 +175,27 @@ button {
 
 .controls {
   display: grid;
-  width: 100%;
+  width: min(100%, 360px);
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
   position: relative;
   z-index: 30;
 }
 
 .control-button {
   display: inline-flex;
-  min-height: 46px;
+  min-height: 38px;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   border: 1px solid rgba(255, 250, 240, 0.16);
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(255, 250, 240, 0.08);
   color: #f6f0df;
   cursor: pointer;
-  font-size: 0.98rem;
+  font-size: 0.88rem;
   font-weight: 800;
+  padding: 0 10px;
   transition:
     transform 140ms ease,
     border-color 140ms ease,
@@ -271,10 +270,6 @@ button {
     width: 100%;
     max-width: none;
     justify-content: flex-start;
-  }
-
-  .controls {
-    grid-template-columns: 1fr;
   }
 
   .board-shell {
