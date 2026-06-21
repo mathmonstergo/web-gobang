@@ -270,3 +270,36 @@ Reworked the Gobang board to use one fixed viewport canvas scene for board, ston
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: Add Gobang effect audio
+
+**Date**: 2026-06-21
+**Task**: Add Gobang effect audio
+**Branch**: `main`
+
+### Summary
+
+实现五子棋第一版程序化 Web Audio 音效：落子、棋形波浪、新局冲击波、棋子碰撞、耍赖皮猫猫脚步和击飞声；修复移动端短点按落子与长按预览兼容，放大预览改为更大的圆角正方形；按钮统一为黑白水墨风并移除外层游戏框。验证通过：pnpm lint、pnpm typecheck、pnpm test、pnpm build、git diff --check。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a8ac28c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
