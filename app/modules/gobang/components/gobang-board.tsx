@@ -32,6 +32,10 @@ import {
   type WaveHighlight
 } from "@/modules/gobang/types";
 import { getResetWaveCrestCount } from "@/modules/gobang/reset-physics";
+import {
+  createTouchPlacementCandidate,
+  type TouchPlacementCandidate
+} from "@/modules/gobang/touch-placement";
 
 type GobangBoardProps = {
   state: GameState;
@@ -156,6 +160,17 @@ type ResetWaveCrest = {
   maxRadius: number;
 };
 
+type TouchPlacementPhase = "pressing" | "previewing";
+
+type TouchPlacementState = {
+  pointerId: number;
+  phase: TouchPlacementPhase;
+  finger: ScreenPoint;
+  candidate: TouchPlacementCandidate;
+  timerId: number | null;
+  activatedAt: number;
+};
+
 const STAR_POINTS: readonly Position[] = [
   { row: 3, col: 3 },
   { row: 3, col: 7 },
@@ -211,6 +226,10 @@ const RESET_INPUT_LOCK_MS = 1200;
 const PLACEMENT_REPLAY_DELAYS_MS: readonly number[] = [2000, 5000, 10000];
 const PLACEMENT_REPLAY_INTERVAL_MS = 10000;
 const DEVICE_PIXEL_RATIO_CAP = 2;
+const TOUCH_LONG_PRESS_MS = 300;
+const TOUCH_MAGNIFIER_ZOOM = 2.35;
+const TOUCH_MAGNIFIER_RADIUS_RATIO = 1.34;
+const TOUCH_MAGNIFIER_MIN_RADIUS = 58;
 
 export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
   function GobangBoard(
@@ -235,6 +254,7 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
     const placementReplayRef = useRef<PlacementReplay | null>(null);
     const placementReplayTimeoutsRef = useRef<number[]>([]);
     const placementReplayIntervalRef = useRef<number | null>(null);
+    const touchPlacementRef = useRef<TouchPlacementState | null>(null);
     const hiddenKeysRef = useRef<Set<string>>(new Set());
     const seenPlacementIdsRef = useRef<Set<string>>(new Set());
     const seenWaveIdsRef = useRef<Set<string>>(new Set());
@@ -267,6 +287,57 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
       clearPlacementReplayTimers();
       placementReplayRef.current = null;
     }, [clearPlacementReplayTimers]);
+
+    const clearTouchPlacement = useCallback(
+      (target?: HTMLDivElement | null): void => {
+        const placement: TouchPlacementState | null = touchPlacementRef.current;
+        if (placement?.timerId !== null && placement?.timerId !== undefined) {
+          window.clearTimeout(placement.timerId);
+        }
+
+        if (
+          target !== undefined &&
+          target !== null &&
+          placement !== null &&
+          target.hasPointerCapture(placement.pointerId)
+        ) {
+          target.releasePointerCapture(placement.pointerId);
+        }
+
+        touchPlacementRef.current = null;
+      },
+      []
+    );
+
+    const updateTouchPlacementFromPointer = useCallback(
+      (
+        pointerId: number,
+        clientX: number,
+        clientY: number,
+        phase: TouchPlacementPhase,
+        timerId: number | null,
+        activatedAt: number
+      ): TouchPlacementState => {
+        const position: Position | null = getPositionFromClient(
+          clientX,
+          clientY,
+          layoutRef.current,
+          sceneLayoutRef.current
+        );
+        const placement: TouchPlacementState = {
+          pointerId,
+          phase,
+          finger: { x: clientX, y: clientY },
+          candidate: createTouchPlacementCandidate(stateRef.current, position),
+          timerId,
+          activatedAt
+        };
+
+        touchPlacementRef.current = placement;
+        return placement;
+      },
+      []
+    );
 
     const enqueuePlacementReplayWave = useCallback(
       (replay: PlacementReplay): void => {
@@ -628,6 +699,14 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
     }, [clearPlacementReplay, state.moves.length]);
 
     useEffect(() => {
+      if (state.status === "playing") {
+        return;
+      }
+
+      clearTouchPlacement(boardSurfaceRef.current);
+    }, [clearTouchPlacement, state.status]);
+
+    useEffect(() => {
       if (victoryTimerRef.current !== null) {
         window.clearInterval(victoryTimerRef.current);
         victoryTimerRef.current = null;
@@ -682,8 +761,9 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
     useEffect(() => {
       return () => {
         clearPlacementReplay();
+        clearTouchPlacement();
       };
-    }, [clearPlacementReplay]);
+    }, [clearPlacementReplay, clearTouchPlacement]);
 
     useEffect(() => {
       const canvas: HTMLCanvasElement | null = mainCanvasRef.current;
@@ -726,6 +806,7 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           resetWaveCrestsRef,
           catSwatRemovalsRef,
           lastResetPhysicsTimestampRef,
+          touchPlacementRef,
           hiddenKeysRef,
           sceneLayout: sceneLayoutRef.current,
           timestamp,
@@ -746,13 +827,53 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           victoryTimerRef.current = null;
         }
         clearPlacementReplay();
+        clearTouchPlacement();
       };
-    }, [clearPlacementReplay]);
+    }, [clearPlacementReplay, clearTouchPlacement]);
 
     const handlePointerDown = (
       event: PointerEvent<HTMLDivElement>
     ): void => {
+      event.currentTarget.focus();
+
       if (state.status !== "playing") {
+        return;
+      }
+
+      if (event.pointerType === "touch") {
+        event.preventDefault();
+        clearTouchPlacement(event.currentTarget);
+        event.currentTarget.setPointerCapture(event.pointerId);
+
+        const timerId: number = window.setTimeout(() => {
+          const activePlacement: TouchPlacementState | null =
+            touchPlacementRef.current;
+          if (
+            activePlacement?.pointerId !== event.pointerId ||
+            activePlacement.phase !== "pressing"
+          ) {
+            return;
+          }
+
+          touchPlacementRef.current = {
+            ...activePlacement,
+            phase: "previewing",
+            timerId: null,
+            activatedAt: performance.now()
+          };
+          hoverRef.current = null;
+        }, TOUCH_LONG_PRESS_MS);
+
+        updateTouchPlacementFromPointer(
+          event.pointerId,
+          event.clientX,
+          event.clientY,
+          "pressing",
+          timerId,
+          0
+        );
+        hoverRef.current = null;
+        isKeyboardCursorVisibleRef.current = false;
         return;
       }
 
@@ -776,6 +897,28 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
     const handlePointerMove = (
       event: PointerEvent<HTMLDivElement>
     ): void => {
+      const activePlacement: TouchPlacementState | null = touchPlacementRef.current;
+      if (
+        event.pointerType === "touch" &&
+        activePlacement?.pointerId === event.pointerId
+      ) {
+        event.preventDefault();
+        updateTouchPlacementFromPointer(
+          activePlacement.pointerId,
+          event.clientX,
+          event.clientY,
+          activePlacement.phase,
+          activePlacement.timerId,
+          activePlacement.activatedAt
+        );
+        hoverRef.current = null;
+        return;
+      }
+
+      if (event.pointerType === "touch") {
+        return;
+      }
+
       hoverRef.current = getPositionFromClient(
         event.clientX,
         event.clientY,
@@ -784,7 +927,62 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
       );
     };
 
-    const handlePointerLeave = (): void => {
+    const handlePointerUp = (
+      event: PointerEvent<HTMLDivElement>
+    ): void => {
+      const activePlacement: TouchPlacementState | null = touchPlacementRef.current;
+      if (
+        event.pointerType !== "touch" ||
+        activePlacement?.pointerId !== event.pointerId
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      const finalPlacement: TouchPlacementState = updateTouchPlacementFromPointer(
+        activePlacement.pointerId,
+        event.clientX,
+        event.clientY,
+        activePlacement.phase,
+        activePlacement.timerId,
+        activePlacement.activatedAt
+      );
+      clearTouchPlacement(event.currentTarget);
+
+      if (
+        finalPlacement.phase !== "previewing" ||
+        finalPlacement.candidate.position === null ||
+        !finalPlacement.candidate.isPlaceable
+      ) {
+        return;
+      }
+
+      cursorRef.current = finalPlacement.candidate.position;
+      isKeyboardCursorVisibleRef.current = false;
+      setRenderTick((value: number) => value + 1);
+      onPlace(finalPlacement.candidate.position);
+    };
+
+    const handlePointerCancel = (
+      event: PointerEvent<HTMLDivElement>
+    ): void => {
+      const activePlacement: TouchPlacementState | null = touchPlacementRef.current;
+      if (
+        activePlacement?.pointerId !== event.pointerId
+      ) {
+        return;
+      }
+
+      clearTouchPlacement(event.currentTarget);
+    };
+
+    const handlePointerLeave = (
+      event: PointerEvent<HTMLDivElement>
+    ): void => {
+      if (event.pointerType === "touch" && touchPlacementRef.current !== null) {
+        return;
+      }
+
       hoverRef.current = null;
     };
 
@@ -851,9 +1049,11 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
             isFocusedRef.current = true;
           }}
           onKeyDown={handleKeyDown}
+          onPointerCancel={handlePointerCancel}
           onPointerDown={handlePointerDown}
           onPointerLeave={handlePointerLeave}
           onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
           role="grid"
           tabIndex={0}
         >
@@ -884,6 +1084,7 @@ type DrawMainCanvasInput = {
   resetWaveCrestsRef: WritableRef<ResetWaveCrest[]>;
   catSwatRemovalsRef: WritableRef<CatSwatRemoval[]>;
   lastResetPhysicsTimestampRef: WritableRef<number>;
+  touchPlacementRef: WritableRef<TouchPlacementState | null>;
   hiddenKeysRef: WritableRef<Set<string>>;
   sceneLayout: SceneLayout;
   timestamp: number;
@@ -978,6 +1179,15 @@ function drawMainCanvas(input: DrawMainCanvasInput): void {
     resetPhysicsStonesRef: input.resetPhysicsStonesRef,
     timestamp: input.timestamp
   });
+  drawTouchMagnifier(
+    context,
+    input.touchPlacementRef.current,
+    input.state,
+    input.layout,
+    input.sceneLayout,
+    input.hiddenKeysRef.current,
+    input.timestamp
+  );
 }
 
 function drawBoard(context: CanvasRenderingContext2D, layout: CanvasLayout): void {
@@ -1309,6 +1519,173 @@ function drawFocusCursor(
   context.setLineDash([layout.cellSize * 0.13, layout.cellSize * 0.16]);
   context.beginPath();
   context.arc(point.x, point.y, layout.cellSize * 0.5, 0, Math.PI * 2);
+  context.stroke();
+  context.restore();
+}
+
+function drawTouchMagnifier(
+  context: CanvasRenderingContext2D,
+  placement: TouchPlacementState | null,
+  state: GameState,
+  layout: CanvasLayout,
+  sceneLayout: SceneLayout,
+  hiddenKeys: ReadonlySet<string>,
+  timestamp: number
+): void {
+  if (
+    placement?.phase !== "previewing" ||
+    layout.size <= 0 ||
+    layout.cellSize <= 0
+  ) {
+    return;
+  }
+
+  const radius: number = Math.max(
+    TOUCH_MAGNIFIER_MIN_RADIUS,
+    layout.cellSize * TOUCH_MAGNIFIER_RADIUS_RATIO
+  );
+  const lensX: number = clampNumber(
+    placement.finger.x,
+    radius + 10,
+    sceneLayout.width - radius - 10
+  );
+  const preferredLensY: number = placement.finger.y - radius * 1.72;
+  const fallbackLensY: number = placement.finger.y + radius * 1.42;
+  const lensY: number = clampNumber(
+    preferredLensY >= radius + 10 ? preferredLensY : fallbackLensY,
+    radius + 10,
+    sceneLayout.height - radius - 10
+  );
+  const boardFocus: ScreenPoint =
+    placement.candidate.position === null
+      ? getClampedBoardPointFromScenePoint(placement.finger, layout, sceneLayout)
+      : getBoardPoint(placement.candidate.position, layout);
+  const activationProgress: number = easeOutQuad(
+    (timestamp - placement.activatedAt) / 180
+  );
+  const lensScale: number = 0.92 + activationProgress * 0.08;
+  const isPlaceable: boolean = placement.candidate.isPlaceable;
+
+  context.save();
+  context.strokeStyle = isPlaceable
+    ? "rgba(246,240,223,0.48)"
+    : "rgba(190,77,54,0.72)";
+  context.lineWidth = 1.4;
+  context.beginPath();
+  context.moveTo(placement.finger.x, placement.finger.y - 6);
+  context.quadraticCurveTo(
+    (placement.finger.x + lensX) / 2,
+    (placement.finger.y + lensY) / 2 + radius * 0.12,
+    lensX,
+    lensY + radius * 0.72
+  );
+  context.stroke();
+  context.restore();
+
+  context.save();
+  context.translate(lensX, lensY);
+  context.scale(lensScale, lensScale);
+  context.translate(-lensX, -lensY);
+  context.shadowColor = "rgba(0,0,0,0.48)";
+  context.shadowBlur = 20;
+  context.shadowOffsetY = 10;
+  context.fillStyle = "rgba(20,16,10,0.94)";
+  context.beginPath();
+  context.arc(lensX, lensY, radius, 0, Math.PI * 2);
+  context.fill();
+  context.shadowColor = "transparent";
+  context.shadowBlur = 0;
+  context.shadowOffsetY = 0;
+
+  context.save();
+  context.beginPath();
+  context.arc(lensX, lensY, radius - 3, 0, Math.PI * 2);
+  context.clip();
+  context.fillStyle = "#ba8735";
+  context.fillRect(lensX - radius, lensY - radius, radius * 2, radius * 2);
+  context.translate(
+    lensX - boardFocus.x * TOUCH_MAGNIFIER_ZOOM,
+    lensY - boardFocus.y * TOUCH_MAGNIFIER_ZOOM
+  );
+  context.scale(TOUCH_MAGNIFIER_ZOOM, TOUCH_MAGNIFIER_ZOOM);
+  drawBoard(context, layout);
+
+  const baseRadius: number = layout.cellSize * STONE_RADIUS_RATIO;
+  for (const move of state.moves) {
+    if (hiddenKeys.has(positionKey(move))) {
+      continue;
+    }
+
+    const point: ScreenPoint = getBoardPoint(move, layout);
+    drawStone(context, point.x, point.y, baseRadius, move.player);
+  }
+
+  if (placement.candidate.position !== null && state.status === "playing") {
+    const candidatePoint: ScreenPoint = getBoardPoint(
+      placement.candidate.position,
+      layout
+    );
+    if (isPlaceable) {
+      context.save();
+      context.globalAlpha = 0.62;
+      drawStone(
+        context,
+        candidatePoint.x,
+        candidatePoint.y,
+        baseRadius,
+        placement.candidate.player
+      );
+      context.restore();
+    } else {
+      context.save();
+      context.strokeStyle = "rgba(190,77,54,0.88)";
+      context.lineWidth = Math.max(1.1, layout.cellSize * 0.045);
+      context.beginPath();
+      context.arc(
+        candidatePoint.x,
+        candidatePoint.y,
+        baseRadius * 1.18,
+        0,
+        Math.PI * 2
+      );
+      context.stroke();
+      context.beginPath();
+      context.moveTo(
+        candidatePoint.x - baseRadius * 0.62,
+        candidatePoint.y - baseRadius * 0.62
+      );
+      context.lineTo(
+        candidatePoint.x + baseRadius * 0.62,
+        candidatePoint.y + baseRadius * 0.62
+      );
+      context.stroke();
+      context.restore();
+    }
+  }
+
+  context.restore();
+
+  const ringGradient: CanvasGradient = context.createLinearGradient(
+    lensX - radius,
+    lensY - radius,
+    lensX + radius,
+    lensY + radius
+  );
+  ringGradient.addColorStop(0, "rgba(255,250,240,0.88)");
+  ringGradient.addColorStop(0.48, "rgba(229,173,61,0.56)");
+  ringGradient.addColorStop(1, "rgba(255,250,240,0.34)");
+  context.strokeStyle = isPlaceable ? ringGradient : "rgba(190,77,54,0.84)";
+  context.lineWidth = 3;
+  context.beginPath();
+  context.arc(lensX, lensY, radius - 1.5, 0, Math.PI * 2);
+  context.stroke();
+
+  context.strokeStyle = isPlaceable
+    ? "rgba(255,250,240,0.42)"
+    : "rgba(190,77,54,0.48)";
+  context.lineWidth = 1;
+  context.beginPath();
+  context.arc(lensX, lensY, radius + 3.5, 0, Math.PI * 2);
   context.stroke();
   context.restore();
 }
@@ -2032,6 +2409,22 @@ function getBoardPoint(position: Position, layout: CanvasLayout): ScreenPoint {
   return {
     x: layout.padding + position.col * layout.cellSize,
     y: layout.padding + position.row * layout.cellSize
+  };
+}
+
+function getClampedBoardPointFromScenePoint(
+  point: ScreenPoint,
+  layout: CanvasLayout,
+  sceneLayout: SceneLayout
+): ScreenPoint {
+  const boardX: number = point.x - sceneLayout.boardOffsetX;
+  const boardY: number = point.y - sceneLayout.boardOffsetY;
+  const minPoint: number = layout.padding;
+  const maxPoint: number = layout.padding + BOARD_GRID_MAX * layout.cellSize;
+
+  return {
+    x: clampNumber(boardX, minPoint, maxPoint),
+    y: clampNumber(boardY, minPoint, maxPoint)
   };
 }
 
