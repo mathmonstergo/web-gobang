@@ -33,6 +33,15 @@ import {
 } from "@/modules/gobang/types";
 import { getResetWaveCrestCount } from "@/modules/gobang/reset-physics";
 import {
+  playCatFootstepSound,
+  playCatSwatSound,
+  playCollisionSound,
+  playPlacementSound,
+  playResetWaveSound,
+  playStoneWaveSound,
+  primeGobangAudio
+} from "@/modules/gobang/audio-effects";
+import {
   createTouchPlacementCandidate,
   type TouchPlacementCandidate
 } from "@/modules/gobang/touch-placement";
@@ -151,6 +160,7 @@ type CatSwatRemoval = {
   bodyLength: number;
   startedAt: number;
   launched: boolean;
+  nextFootstepAt: number;
 };
 
 type ResetWaveCrest = {
@@ -158,6 +168,7 @@ type ResetWaveCrest = {
   origin: ScreenPoint;
   startedAt: number;
   maxRadius: number;
+  soundPlayed: boolean;
 };
 
 type TouchPlacementPhase = "pressing" | "previewing";
@@ -199,6 +210,7 @@ const CAT_RUN_OUT_MS = 820;
 const CAT_TOTAL_MS =
   CAT_RUN_IN_MS + CAT_WINDUP_MS + CAT_SWAT_MS + CAT_RECOVER_MS + CAT_RUN_OUT_MS;
 const CAT_RUN_CYCLE_MS = 280;
+const CAT_FOOTSTEP_INTERVAL_MS = 145;
 const CAT_SWAT_SPEED = 1350;
 const CAT_FUR_DARK = "#37322d";
 const CAT_FUR = "#46403a";
@@ -227,9 +239,10 @@ const PLACEMENT_REPLAY_DELAYS_MS: readonly number[] = [2000, 5000, 10000];
 const PLACEMENT_REPLAY_INTERVAL_MS = 10000;
 const DEVICE_PIXEL_RATIO_CAP = 2;
 const TOUCH_LONG_PRESS_MS = 300;
-const TOUCH_MAGNIFIER_ZOOM = 2.35;
-const TOUCH_MAGNIFIER_RADIUS_RATIO = 1.34;
-const TOUCH_MAGNIFIER_MIN_RADIUS = 58;
+const TOUCH_MAGNIFIER_ZOOM = 1.85;
+const TOUCH_MAGNIFIER_SIZE_RATIO = 3.8;
+const TOUCH_MAGNIFIER_MIN_SIZE = 148;
+const TOUCH_MAGNIFIER_CORNER_RATIO = 0.16;
 
 export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
   function GobangBoard(
@@ -366,6 +379,7 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           highlights,
           startedAt: performance.now()
         });
+        playStoneWaveSound(replay.player);
       },
       [createAnimationId]
     );
@@ -482,7 +496,8 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
             id: createAnimationId("reset-wave-crest"),
             origin: shockOrigin,
             startedAt: now + crestIndex * RESET_WAVE_INTERVAL_MS,
-            maxRadius
+            maxRadius,
+            soundPlayed: false
           });
         }
 
@@ -594,7 +609,8 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           radius,
           bodyLength,
           startedAt: performance.now(),
-          launched: false
+          launched: false,
+          nextFootstepAt: performance.now()
         });
       },
       [clearPlacementReplay, createAnimationId]
@@ -620,6 +636,7 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
       }
 
       seenPlacementIdsRef.current.add(placement.id);
+      playPlacementSound(placement.player);
       bloomsRef.current.push({
         id: placement.id,
         player: placement.player,
@@ -670,6 +687,7 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           highlights,
           startedAt: performance.now()
         });
+        playStoneWaveSound(placement.player);
       }
 
       if (effects.victory !== null) {
@@ -743,6 +761,7 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           highlights,
           startedAt: performance.now()
         });
+        playStoneWaveSound(latestEffects.victory.player);
       };
 
       victoryTimerRef.current = window.setInterval(
@@ -834,6 +853,8 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
     const handlePointerDown = (
       event: PointerEvent<HTMLDivElement>
     ): void => {
+      primeGobangAudio();
+
       if (state.status !== "playing") {
         return;
       }
@@ -948,7 +969,6 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
       clearTouchPlacement(event.currentTarget);
 
       if (
-        finalPlacement.phase !== "previewing" ||
         finalPlacement.candidate.position === null ||
         !finalPlacement.candidate.isPlaceable
       ) {
@@ -1013,6 +1033,7 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
 
       if ((event.key === "Enter" || event.key === " ") && state.status === "playing") {
         event.preventDefault();
+        primeGobangAudio();
         const cursor: Position = cursorRef.current;
         const cell: Player | null | undefined = state.board[cursor.row]?.[cursor.col];
         if (cell === null) {
@@ -1538,21 +1559,23 @@ function drawTouchMagnifier(
     return;
   }
 
-  const radius: number = Math.max(
-    TOUCH_MAGNIFIER_MIN_RADIUS,
-    layout.cellSize * TOUCH_MAGNIFIER_RADIUS_RATIO
+  const lensSize: number = Math.max(
+    TOUCH_MAGNIFIER_MIN_SIZE,
+    layout.cellSize * TOUCH_MAGNIFIER_SIZE_RATIO
   );
+  const halfSize: number = lensSize / 2;
+  const cornerRadius: number = lensSize * TOUCH_MAGNIFIER_CORNER_RATIO;
   const lensX: number = clampNumber(
     placement.finger.x,
-    radius + 10,
-    sceneLayout.width - radius - 10
+    halfSize + 10,
+    sceneLayout.width - halfSize - 10
   );
-  const preferredLensY: number = placement.finger.y - radius * 1.72;
-  const fallbackLensY: number = placement.finger.y + radius * 1.42;
+  const preferredLensY: number = placement.finger.y - lensSize * 1.08;
+  const fallbackLensY: number = placement.finger.y + lensSize * 0.92;
   const lensY: number = clampNumber(
-    preferredLensY >= radius + 10 ? preferredLensY : fallbackLensY,
-    radius + 10,
-    sceneLayout.height - radius - 10
+    preferredLensY >= halfSize + 10 ? preferredLensY : fallbackLensY,
+    halfSize + 10,
+    sceneLayout.height - halfSize - 10
   );
   const boardFocus: ScreenPoint =
     placement.candidate.position === null
@@ -1573,9 +1596,9 @@ function drawTouchMagnifier(
   context.moveTo(placement.finger.x, placement.finger.y - 6);
   context.quadraticCurveTo(
     (placement.finger.x + lensX) / 2,
-    (placement.finger.y + lensY) / 2 + radius * 0.12,
+    (placement.finger.y + lensY) / 2 + lensSize * 0.05,
     lensX,
-    lensY + radius * 0.72
+    lensY + halfSize * 0.92
   );
   context.stroke();
   context.restore();
@@ -1589,7 +1612,13 @@ function drawTouchMagnifier(
   context.shadowOffsetY = 10;
   context.fillStyle = "rgba(20,16,10,0.94)";
   context.beginPath();
-  context.arc(lensX, lensY, radius, 0, Math.PI * 2);
+  context.roundRect(
+    lensX - halfSize,
+    lensY - halfSize,
+    lensSize,
+    lensSize,
+    cornerRadius
+  );
   context.fill();
   context.shadowColor = "transparent";
   context.shadowBlur = 0;
@@ -1597,10 +1626,16 @@ function drawTouchMagnifier(
 
   context.save();
   context.beginPath();
-  context.arc(lensX, lensY, radius - 3, 0, Math.PI * 2);
+  context.roundRect(
+    lensX - halfSize + 3,
+    lensY - halfSize + 3,
+    lensSize - 6,
+    lensSize - 6,
+    Math.max(4, cornerRadius - 3)
+  );
   context.clip();
   context.fillStyle = "#ba8735";
-  context.fillRect(lensX - radius, lensY - radius, radius * 2, radius * 2);
+  context.fillRect(lensX - halfSize, lensY - halfSize, lensSize, lensSize);
   context.translate(
     lensX - boardFocus.x * TOUCH_MAGNIFIER_ZOOM,
     lensY - boardFocus.y * TOUCH_MAGNIFIER_ZOOM
@@ -1664,10 +1699,10 @@ function drawTouchMagnifier(
   context.restore();
 
   const ringGradient: CanvasGradient = context.createLinearGradient(
-    lensX - radius,
-    lensY - radius,
-    lensX + radius,
-    lensY + radius
+    lensX - halfSize,
+    lensY - halfSize,
+    lensX + halfSize,
+    lensY + halfSize
   );
   ringGradient.addColorStop(0, "rgba(255,250,240,0.88)");
   ringGradient.addColorStop(0.48, "rgba(229,173,61,0.56)");
@@ -1675,7 +1710,13 @@ function drawTouchMagnifier(
   context.strokeStyle = isPlaceable ? ringGradient : "rgba(190,77,54,0.84)";
   context.lineWidth = 3;
   context.beginPath();
-  context.arc(lensX, lensY, radius - 1.5, 0, Math.PI * 2);
+  context.roundRect(
+    lensX - halfSize + 1.5,
+    lensY - halfSize + 1.5,
+    lensSize - 3,
+    lensSize - 3,
+    Math.max(4, cornerRadius - 1.5)
+  );
   context.stroke();
 
   context.strokeStyle = isPlaceable
@@ -1683,7 +1724,13 @@ function drawTouchMagnifier(
     : "rgba(190,77,54,0.48)";
   context.lineWidth = 1;
   context.beginPath();
-  context.arc(lensX, lensY, radius + 3.5, 0, Math.PI * 2);
+  context.roundRect(
+    lensX - halfSize - 3.5,
+    lensY - halfSize - 3.5,
+    lensSize + 7,
+    lensSize + 7,
+    cornerRadius + 3.5
+  );
   context.stroke();
   context.restore();
 }
@@ -1697,6 +1744,11 @@ function drawResetWaveCrests(
     const seconds: number = (timestamp - crest.startedAt) / 1000;
     if (seconds < 0) {
       return true;
+    }
+
+    if (!crest.soundPlayed) {
+      crest.soundPlayed = true;
+      playResetWaveSound();
     }
 
     if (RIPPLE_SPEED * seconds > crest.maxRadius + RIPPLE_LAMBDA) {
@@ -1801,6 +1853,7 @@ function drawCatSwatRemoval(
   if (age < runInEnd) {
     const progress: number = easeOutPower(age / CAT_RUN_IN_MS);
     catPoint = lerpPoint(removal.entry, removal.swat, progress);
+    playCatFootstepIfDue(removal, input.timestamp);
   } else if (age < windupEnd) {
     catPoint = removal.swat;
     pawSwipe = -(age - runInEnd) / CAT_WINDUP_MS;
@@ -1809,6 +1862,7 @@ function drawCatSwatRemoval(
     pawSwipe = -1 + 2 * easeInPower((age - windupEnd) / CAT_SWAT_MS);
     if (!removal.launched) {
       removal.launched = true;
+      playCatSwatSound();
       shouldDrawStone = false;
       input.resetPhysicsStonesRef.current.push(
         createSwattedPhysicsStone(removal, input.timestamp)
@@ -1820,6 +1874,7 @@ function drawCatSwatRemoval(
   } else {
     const progress: number = easeInPower((age - recoverEnd) / CAT_RUN_OUT_MS);
     catPoint = lerpPoint(removal.swat, removal.exit, progress);
+    playCatFootstepIfDue(removal, input.timestamp);
   }
 
   if (shouldDrawStone) {
@@ -1841,6 +1896,18 @@ function drawCatSwatRemoval(
     age / CAT_RUN_CYCLE_MS,
     pawSwipe
   );
+}
+
+function playCatFootstepIfDue(
+  removal: CatSwatRemoval,
+  timestamp: number
+): void {
+  if (timestamp < removal.nextFootstepAt) {
+    return;
+  }
+
+  playCatFootstepSound();
+  removal.nextFootstepAt = timestamp + CAT_FOOTSTEP_INTERVAL_MS;
 }
 
 function createSwattedPhysicsStone(
@@ -2286,6 +2353,7 @@ function resolveResetCollisions(stones: readonly ResetPhysicsStone[]): void {
       }
 
       const impulse: number = -relativeVelocity;
+      playCollisionSound(clampNumber(impulse / 900, 0, 1));
       stoneA.vx -= impulse * normalX;
       stoneA.vy -= impulse * normalY;
       stoneB.vx += impulse * normalX;

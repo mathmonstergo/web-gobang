@@ -203,13 +203,15 @@ For the Gobang board, keep game rules and rendering effects separated:
   completed their full fall/fade animation.
 - Pointer/touch placement must not leave keyboard focus affordances on the placed stone. Only show the dashed focus cursor after keyboard navigation, and hide it again after a successful keyboard placement.
 - Mobile touch placement must not call the game mutation from `pointerdown`.
-  Use a long-press state machine stored in refs, show the preview only after the
-  threshold, update the candidate on pointer movement, and call `onPlace` only
-  from `pointerup` after re-validating the latest candidate against current
-  game state. A short tap should cancel without placing.
+  Use a touch state machine stored in refs, show the preview only after the
+  long-press threshold, update the candidate on pointer movement, and call
+  `onPlace` only from `pointerup` after re-validating the latest candidate
+  against current game state. A short tap should place normally on `pointerup`;
+  long press is an additional precision preview mode, not a replacement for tap.
 - Touch placement previews must be drawn in the single board canvas with the
-  existing `CanvasLayout` and `SceneLayout`. Do not introduce a DOM lens,
-  portal, or overlay canvas for the mobile magnifier; those reintroduce
+  existing `CanvasLayout` and `SceneLayout`. Use the same canvas for rounded
+  square mobile magnifiers as well as circular effects. Do not introduce a DOM
+  lens, portal, or overlay canvas for the mobile magnifier; those reintroduce
   coordinate drift between `.board-surface` and the fixed viewport canvas.
 - Undo removal effects may hide the logical stone immediately only if the removal copy is already queued at the exact same screen coordinate. The visual removal object should own the animation until it leaves view, so fast replays or new placements do not mutate older effects.
 - Testable helpers used by canvas components should live in non-component module

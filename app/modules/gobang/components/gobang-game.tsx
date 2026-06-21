@@ -6,6 +6,7 @@ import {
   type GobangBoardHandle,
   type ScreenPoint
 } from "@/modules/gobang/components/gobang-board";
+import { primeGobangAudio } from "@/modules/gobang/audio-effects";
 import { useGobangGame } from "@/modules/gobang/hooks/use-gobang-game";
 import { type Move, type Player, type Position } from "@/modules/gobang/types";
 
@@ -19,6 +20,8 @@ export function GobangGame(): ReactElement {
   const winnerLabel: string | null =
     state.winner === null ? null : getPlayerLabel(state.winner.player);
   const handleReset = (): void => {
+    primeGobangAudio();
+
     if (isResetPending) {
       return;
     }
@@ -47,6 +50,8 @@ export function GobangGame(): ReactElement {
     }, delayMs);
   };
   const handleUndo = (): void => {
+    primeGobangAudio();
+
     if (isResetPending || state.moves.length === 0) {
       return;
     }
