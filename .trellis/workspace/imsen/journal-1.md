@@ -237,3 +237,36 @@ Reworked the Gobang board to use one fixed viewport canvas scene for board, ston
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Add mobile long press placement
+
+**Date**: 2026-06-21
+**Task**: Add mobile long press placement
+**Branch**: `main`
+
+### Summary
+
+实现移动端长按预览落子：触摸短按不落子，长按后在单 Canvas 内显示 iOS 风格放大镜，拖动更新候选交叉点，松手时重新校验空位后落子；保留鼠标直接点击。新增 touch placement helper 与单元测试，更新 Gobang Canvas 规范。验证通过：pnpm lint、pnpm typecheck、pnpm test、pnpm build、git diff --check。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e1aa472` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
