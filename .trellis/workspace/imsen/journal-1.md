@@ -337,3 +337,36 @@ Added online invite rooms with Worker and Durable Object backend, direct invite-
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: Fix online gameplay regressions
+
+**Date**: 2026-06-23
+**Task**: Fix online gameplay regressions
+**Branch**: `online`
+
+### Summary
+
+Fixed online room cleanup, server notifications, authoritative board effects, request prompts, and online player status timers.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3171d6d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
