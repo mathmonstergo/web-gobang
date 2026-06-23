@@ -12,6 +12,7 @@ import {
   OnlineRoomDialog,
   type OnlineRoomReady
 } from "@/modules/gobang/components/online-room-dialog";
+import { OnlinePlayerStatusPanel } from "@/modules/gobang/components/online-player-status-panel";
 import {
   RollingActionLabel,
   type RollingActionLabelValue
@@ -21,9 +22,22 @@ import { deriveEffects } from "@/modules/gobang/effects";
 import { useGobangGame } from "@/modules/gobang/hooks/use-gobang-game";
 import { useOnlineGobangRoom } from "@/modules/gobang/hooks/use-online-gobang-room";
 import { canLeaveOnlineMode } from "@/modules/gobang/online-mode-flow";
+import {
+  canRequestOnlineSurrender,
+  canRequestOnlineUndo,
+  getIncomingOnlineRequest
+} from "@/modules/gobang/online-request-state";
 import { parseInviteRoomCode } from "@/modules/gobang/online-room-client";
+import {
+  deriveOnlinePlacementEffect,
+  getOnlineBoardPreviewPlayer,
+  getOnlineResetTransition
+} from "@/modules/gobang/online-snapshot-effects";
 import { loadOnlineProfile } from "@/modules/gobang/online-storage";
-import { type OnlineGamePhase } from "@/modules/gobang/online-types";
+import {
+  type OnlineGamePhase,
+  type OnlineRoomSnapshot
+} from "@/modules/gobang/online-types";
 import {
   type DerivedEffects,
   type GameState,
@@ -39,7 +53,13 @@ export function GobangGame(): ReactElement {
   const boardRef = useRef<GobangBoardHandle | null>(null);
   const resetButtonRef = useRef<HTMLButtonElement | null>(null);
   const resetTimeoutRef = useRef<number | null>(null);
+  const onlineResetTimeoutRef = useRef<number | null>(null);
+  const previousOnlineSnapshotRef = useRef<OnlineRoomSnapshot | null>(null);
   const [isResetPending, setIsResetPending] = useState(false);
+  const [onlineResetVisual, setOnlineResetVisual] = useState<{
+    game: GameState;
+    gameNumber: number;
+  } | null>(null);
   const [onlineRoom, setOnlineRoom] = useState<OnlineRoomReady | null>(null);
   const [initialOnlineRoomCode, setInitialOnlineRoomCode] = useState<
     string | null
@@ -48,46 +68,91 @@ export function GobangGame(): ReactElement {
     initialOnlineRoomCode !== null
   );
   const [isOnlineExitNoticeOpen, setIsOnlineExitNoticeOpen] = useState(false);
+  const completeOnlineResetAnimation = onlineRoomClient.completeResetAnimation;
   const onlineSnapshot = onlineRoomClient.snapshot;
   const onlineGamePhase: OnlineGamePhase | null = onlineSnapshot?.phase ?? null;
   const isOnlineRoomActive = onlineRoom !== null;
+  const shouldShowOnlinePlayerStatus =
+    onlineSnapshot !== null && onlineSnapshot.startedAt !== null;
+  const onlineResetTransition =
+    onlineSnapshot === null
+      ? null
+      : getOnlineResetTransition(
+          previousOnlineSnapshotRef.current,
+          onlineSnapshot
+        );
+  const persistedOnlineResetVisual =
+    onlineSnapshot !== null &&
+    onlineResetVisual?.gameNumber === onlineSnapshot.gameNumber
+      ? onlineResetVisual
+      : null;
+  const onlineResetVisualGame: GameState | null =
+    persistedOnlineResetVisual?.game ??
+    onlineResetTransition?.visualGame ??
+    null;
+  const isShowingOnlineResetVisual = onlineResetVisualGame !== null;
   const isUsingServerBoard =
     isOnlineRoomActive &&
     onlineSnapshot !== null &&
-    isAuthoritativeOnlinePhase(onlineSnapshot.phase);
+    (isAuthoritativeOnlinePhase(onlineSnapshot.phase) ||
+      isShowingOnlineResetVisual);
   const serverEffects: DerivedEffects | null = useMemo(
     () =>
       onlineSnapshot === null
         ? null
-        : deriveEffects(onlineSnapshot.game, null),
+        : deriveEffects(
+            onlineSnapshot.game,
+            deriveOnlinePlacementEffect(
+              previousOnlineSnapshotRef.current,
+              onlineSnapshot
+            )
+          ),
     [onlineSnapshot]
   );
   const state: GameState =
     isUsingServerBoard
-      ? onlineSnapshot.game
+      ? onlineResetVisualGame ?? onlineSnapshot.game
       : isOnlineRoomActive
         ? warmupGame.state
         : localGame.state;
   const effects: DerivedEffects =
-    isUsingServerBoard && serverEffects !== null
-      ? serverEffects
-      : isOnlineRoomActive
-        ? warmupGame.effects
-        : localGame.effects;
+    isUsingServerBoard && onlineResetVisualGame !== null
+      ? deriveEffects(onlineResetVisualGame, null)
+      : isUsingServerBoard && serverEffects !== null
+        ? serverEffects
+        : isOnlineRoomActive
+          ? warmupGame.effects
+          : localGame.effects;
+  const onlinePreviewPlayer =
+    onlineSnapshot === null ? null : getOnlineBoardPreviewPlayer(onlineSnapshot);
+  const previewPlayer: Player | null =
+    isUsingServerBoard ? onlinePreviewPlayer : state.currentPlayer;
+  const isPlacementEnabled =
+    isUsingServerBoard ? onlinePreviewPlayer !== null : state.status === "playing";
   const currentLabel: string = getPlayerLabel(state.currentPlayer);
   const winnerLabel: string | null =
     state.winner === null ? null : getPlayerLabel(state.winner.player);
   const latestMove: Move | undefined = state.moves.at(-1);
-  const canRequestOnlineUndo =
-    isUsingServerBoard &&
-    onlineSnapshot.phase === "playing" &&
-    latestMove?.player === onlineSnapshot.viewerColor;
+  const canRequestOnlineUndoAction =
+    onlineSnapshot !== null && canRequestOnlineUndo(onlineSnapshot);
+  const canRequestOnlineSurrenderAction =
+    onlineSnapshot !== null && canRequestOnlineSurrender(onlineSnapshot);
+  const incomingOnlineRequest =
+    onlineSnapshot === null ? null : getIncomingOnlineRequest(onlineSnapshot);
+  const incomingRequestTitle =
+    incomingOnlineRequest?.type === "undo" ? "对方请求悔棋" : "对方请求认输";
+  const canSendOnlineUndo =
+    isUsingServerBoard && canRequestOnlineUndoAction;
   const resetActionLabel: RollingActionLabelValue =
     isUsingServerBoard && onlineSnapshot.phase === "playing" ? "认输" : "新局";
   const isUndoDisabled =
     isResetPending ||
-    (isUsingServerBoard ? !canRequestOnlineUndo : state.moves.length === 0);
-  const isResetDisabled = isResetPending;
+    (isUsingServerBoard ? !canSendOnlineUndo : state.moves.length === 0);
+  const isResetDisabled =
+    isResetPending ||
+    (isUsingServerBoard &&
+      onlineSnapshot.phase === "playing" &&
+      !canRequestOnlineSurrenderAction);
   const handleReset = (): void => {
     primeGobangAudio();
 
@@ -97,6 +162,11 @@ export function GobangGame(): ReactElement {
 
     if (isUsingServerBoard && onlineSnapshot.phase === "playing") {
       onlineRoomClient.requestSurrender();
+      return;
+    }
+
+    if (isUsingServerBoard && onlineSnapshot.phase === "ended") {
+      onlineRoomClient.startNewGame();
       return;
     }
 
@@ -144,6 +214,18 @@ export function GobangGame(): ReactElement {
     }
 
     localGame.undo();
+  };
+  const handleRespondOnlineRequest = (accept: boolean): void => {
+    if (incomingOnlineRequest === null) {
+      return;
+    }
+
+    if (incomingOnlineRequest.type === "undo") {
+      onlineRoomClient.respondUndo(incomingOnlineRequest.requestId, accept);
+      return;
+    }
+
+    onlineRoomClient.respondSurrender(incomingOnlineRequest.requestId, accept);
   };
   const handlePlace = (position: Position): void => {
     if (isResetPending) {
@@ -241,8 +323,66 @@ export function GobangGame(): ReactElement {
       if (resetTimeoutRef.current !== null) {
         window.clearTimeout(resetTimeoutRef.current);
       }
+      if (onlineResetTimeoutRef.current !== null) {
+        window.clearTimeout(onlineResetTimeoutRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (onlineSnapshot === null) {
+      previousOnlineSnapshotRef.current = null;
+      setOnlineResetVisual(null);
+      if (onlineResetTimeoutRef.current !== null) {
+        window.clearTimeout(onlineResetTimeoutRef.current);
+        onlineResetTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    const transition = getOnlineResetTransition(
+      previousOnlineSnapshotRef.current,
+      onlineSnapshot
+    );
+    if (transition !== null) {
+      if (onlineResetTimeoutRef.current !== null) {
+        window.clearTimeout(onlineResetTimeoutRef.current);
+        onlineResetTimeoutRef.current = null;
+      }
+
+      setOnlineResetVisual({
+        game: transition.visualGame,
+        gameNumber: transition.gameNumber
+      });
+      setIsResetPending(true);
+
+      const delayMs: number = boardRef.current?.playResetAnimation(
+        transition.moves,
+        getElementCenter(resetButtonRef.current)
+      ) ?? 0;
+      const finishOnlineReset = (): void => {
+        onlineResetTimeoutRef.current = null;
+        setOnlineResetVisual((currentVisual) =>
+          currentVisual?.gameNumber === transition.gameNumber
+            ? null
+            : currentVisual
+        );
+        setIsResetPending(false);
+        completeOnlineResetAnimation(transition.gameNumber);
+      };
+
+      if (delayMs <= 0) {
+        finishOnlineReset();
+      } else {
+        onlineResetTimeoutRef.current = window.setTimeout(
+          finishOnlineReset,
+          delayMs
+        );
+      }
+    }
+
+    previousOnlineSnapshotRef.current = onlineSnapshot;
+  }, [completeOnlineResetAnimation, onlineSnapshot]);
 
   return (
     <main className="app-shell">
@@ -274,24 +414,36 @@ export function GobangGame(): ReactElement {
                 </button>
               ) : null}
             </div>
-            <div className="status-stack" aria-live="polite">
-              <span
-                className={[
-                  "status-pill",
-                  state.currentPlayer === "black"
-                    ? "status-black"
-                    : "status-white"
-                ].join(" ")}
-              >
-                {winnerLabel === null ? `${currentLabel}回合` : `${winnerLabel}胜`}
-              </span>
+            <div
+              className={[
+                "status-stack",
+                shouldShowOnlinePlayerStatus ? "has-online-players" : ""
+              ].join(" ")}
+              aria-live="polite"
+            >
+              {shouldShowOnlinePlayerStatus ? (
+                <OnlinePlayerStatusPanel snapshot={onlineSnapshot} />
+              ) : (
+                <span
+                  className={[
+                    "status-pill",
+                    state.currentPlayer === "black"
+                      ? "status-black"
+                      : "status-white"
+                  ].join(" ")}
+                >
+                  {winnerLabel === null ? `${currentLabel}回合` : `${winnerLabel}胜`}
+                </span>
+              )}
             </div>
           </header>
 
           <GobangBoard
             ref={boardRef}
             effects={effects}
+            isPlacementEnabled={isPlacementEnabled}
             onPlace={handlePlace}
+            previewPlayer={previewPlayer}
             state={state}
           />
 
@@ -326,6 +478,36 @@ export function GobangGame(): ReactElement {
         }}
         onRoomReady={handleOnlineRoomReady}
       />
+      <CommonModal
+        isOpen={incomingOnlineRequest !== null}
+        onClose={() => {
+          handleRespondOnlineRequest(false);
+        }}
+        title={incomingRequestTitle}
+      >
+        <div className="online-dialog-stack">
+          <div className="online-request-actions">
+            <button
+              className="online-secondary-action"
+              onClick={() => {
+                handleRespondOnlineRequest(false);
+              }}
+              type="button"
+            >
+              拒绝
+            </button>
+            <button
+              className="online-primary-action"
+              onClick={() => {
+                handleRespondOnlineRequest(true);
+              }}
+              type="button"
+            >
+              同意
+            </button>
+          </div>
+        </div>
+      </CommonModal>
       <CommonModal
         isOpen={isOnlineExitNoticeOpen}
         onClose={() => {

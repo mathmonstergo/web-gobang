@@ -5,8 +5,8 @@ import {
   createInitialRoomState,
   disconnectPlayer,
   expireDisconnectedSlots,
-  joinRoom,
   getRoomJoinability,
+  joinRoom,
   placeOnlineStone,
   receiveHeartbeat,
   requestSurrender,
@@ -18,6 +18,13 @@ import {
 import { type OnlineRoomState } from "./protocol";
 
 describe("online room state", () => {
+  it("records creation and pre-play lifecycle metadata", () => {
+    expect(createInitialRoomState("ABCDEF", 123)).toMatchObject({
+      createdAt: 123,
+      hasEnteredPlaying: false
+    });
+  });
+
   it("moves from waiting to stabilizing after two players join", () => {
     const afterBlack = joinRoom(createRoom(), playerInput("black-id", "Ada"), 1);
     expect(afterBlack.success).toBe(true);
@@ -85,6 +92,7 @@ describe("online room state", () => {
     expect(state.phase).toBe("playing");
     expect(state.startedAt).toBe(15);
     expect(state.turnStartedAt).toBe(15);
+    expect(state).toMatchObject({ hasEnteredPlaying: true });
   });
 
   it("resets turn timer anchors after accepted moves", () => {

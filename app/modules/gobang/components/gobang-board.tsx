@@ -50,6 +50,8 @@ type GobangBoardProps = {
   state: GameState;
   effects: DerivedEffects;
   onPlace: (position: Position) => void;
+  previewPlayer?: Player | null;
+  isPlacementEnabled?: boolean;
 };
 
 type WritableRef<T> = {
@@ -246,7 +248,13 @@ const TOUCH_MAGNIFIER_CORNER_RATIO = 0.16;
 
 export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
   function GobangBoard(
-    { state, effects, onPlace }: GobangBoardProps,
+    {
+      state,
+      effects,
+      onPlace,
+      previewPlayer = state.currentPlayer,
+      isPlacementEnabled = true
+    }: GobangBoardProps,
     ref
   ): ReactElement {
     const mainCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -255,6 +263,8 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
     const sceneLayoutRef = useRef<SceneLayout>(EMPTY_SCENE_LAYOUT);
     const stateRef = useRef<GameState>(state);
     const effectsRef = useRef<DerivedEffects>(effects);
+    const previewPlayerRef = useRef<Player | null>(previewPlayer);
+    const isPlacementEnabledRef = useRef(isPlacementEnabled);
     const cursorRef = useRef<Position>({ row: 7, col: 7 });
     const hoverRef = useRef<Position | null>(null);
     const isFocusedRef = useRef(false);
@@ -278,6 +288,8 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
 
     stateRef.current = state;
     effectsRef.current = effects;
+    previewPlayerRef.current = previewPlayer;
+    isPlacementEnabledRef.current = isPlacementEnabled;
 
     const createAnimationId = useCallback((prefix: string): string => {
       nextAnimationIdRef.current += 1;
@@ -817,6 +829,7 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
           state: stateRef.current,
           cursor: cursorRef.current,
           hover: hoverRef.current,
+          previewPlayer: previewPlayerRef.current,
           isFocused: isFocusedRef.current,
           isKeyboardCursorVisible: isKeyboardCursorVisibleRef.current,
           bloomsRef,
@@ -855,7 +868,7 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
     ): void => {
       primeGobangAudio();
 
-      if (state.status !== "playing") {
+      if (!isPlacementEnabledRef.current || state.status !== "playing") {
         return;
       }
 
@@ -917,6 +930,11 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
       event: PointerEvent<HTMLDivElement>
     ): void => {
       const activePlacement: TouchPlacementState | null = touchPlacementRef.current;
+      if (!isPlacementEnabledRef.current || state.status !== "playing") {
+        hoverRef.current = null;
+        return;
+      }
+
       if (
         event.pointerType === "touch" &&
         activePlacement?.pointerId === event.pointerId
@@ -958,6 +976,11 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
       }
 
       event.preventDefault();
+      if (!isPlacementEnabledRef.current) {
+        clearTouchPlacement(event.currentTarget);
+        return;
+      }
+
       const finalPlacement: TouchPlacementState = updateTouchPlacementFromPointer(
         activePlacement.pointerId,
         event.clientX,
@@ -1031,7 +1054,11 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
         return;
       }
 
-      if ((event.key === "Enter" || event.key === " ") && state.status === "playing") {
+      if (
+        (event.key === "Enter" || event.key === " ") &&
+        isPlacementEnabledRef.current &&
+        state.status === "playing"
+      ) {
         event.preventDefault();
         primeGobangAudio();
         const cursor: Position = cursorRef.current;
@@ -1095,6 +1122,7 @@ type DrawMainCanvasInput = {
   state: GameState;
   cursor: Position;
   hover: Position | null;
+  previewPlayer: Player | null;
   isFocused: boolean;
   isKeyboardCursorVisible: boolean;
   bloomsRef: WritableRef<BloomAnimation[]>;
@@ -1152,7 +1180,7 @@ function drawMainCanvas(input: DrawMainCanvasInput): void {
   }
 
   drawLastMoveMarker(context, input.state, input.hiddenKeysRef.current, layout);
-  drawHoverStone(context, input.state, input.hover, layout);
+  drawHoverStone(context, input.state, input.hover, input.previewPlayer, layout);
   drawFocusCursor(
     context,
     input.cursor,
@@ -1497,9 +1525,10 @@ function drawHoverStone(
   context: CanvasRenderingContext2D,
   state: GameState,
   hover: Position | null,
+  previewPlayer: Player | null,
   layout: CanvasLayout
 ): void {
-  if (hover === null || state.status !== "playing") {
+  if (hover === null || previewPlayer === null || state.status !== "playing") {
     return;
   }
 
@@ -1516,7 +1545,7 @@ function drawHoverStone(
     point.x,
     point.y,
     layout.cellSize * STONE_RADIUS_RATIO,
-    state.currentPlayer
+    previewPlayer
   );
   context.restore();
 }

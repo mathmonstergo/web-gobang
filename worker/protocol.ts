@@ -35,6 +35,7 @@ export type OnlineNotificationEvent =
   | "surrender-rejected"
   | "surrender-expired"
   | "game-started"
+  | "game-ended"
   | "room-full"
   | "invite-copied"
   | "new-game-started";
@@ -90,6 +91,8 @@ export type OnlineRoomState = {
   endReason: OnlineEndReason | null;
   pendingRequest: PendingRoomRequest | null;
   gameNumber: number;
+  createdAt: number;
+  hasEnteredPlaying: boolean;
   startedAt: number | null;
   turnStartedAt: number | null;
   turnPausedAt: number | null;
