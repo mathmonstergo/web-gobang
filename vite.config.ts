@@ -7,11 +7,12 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      "@": fileURLToPath(new URL("./app", import.meta.url))
+      "@": fileURLToPath(new URL("./app", import.meta.url)),
+      "@shared": fileURLToPath(new URL("./shared", import.meta.url))
     }
   },
   test: {
     environment: "node",
-    include: ["app/**/*.test.ts"]
+    include: ["app/**/*.test.ts", "shared/**/*.test.ts", "worker/**/*.test.ts"]
   }
 });

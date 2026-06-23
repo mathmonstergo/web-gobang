@@ -28,28 +28,42 @@ export type GobangController = {
   reset: () => void;
 };
 
-export function useGobangGame(): GobangController {
+export type GobangGamePersistence = "local" | "memory";
+
+export type UseGobangGameOptions = {
+  persistence?: GobangGamePersistence;
+};
+
+export function useGobangGame(
+  options: UseGobangGameOptions = {}
+): GobangController {
+  const persistence = options.persistence ?? "local";
   const [state, setState] = useState<GameState>(() => createInitialState());
   const [latestPlacement, setLatestPlacement] =
     useState<PlacementEffect | null>(null);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(persistence === "memory");
   const placementEffectSequenceRef = useRef(0);
 
   useEffect(() => {
+    if (persistence === "memory") {
+      setIsLoaded(true);
+      return;
+    }
+
     const storedState: GameState | null = loadStoredGameState();
     if (storedState !== null) {
       setState(storedState);
     }
     setIsLoaded(true);
-  }, []);
+  }, [persistence]);
 
   useEffect(() => {
-    if (!isLoaded) {
+    if (!isLoaded || persistence === "memory") {
       return;
     }
 
     saveGameState(state);
-  }, [isLoaded, state]);
+  }, [isLoaded, persistence, state]);
 
   const placeAt = useCallback((position: Position): void => {
     setState((previousState: GameState) => {
@@ -94,10 +108,12 @@ export function useGobangGame(): GobangController {
   }, []);
 
   const reset = useCallback((): void => {
-    clearStoredGameState();
+    if (persistence === "local") {
+      clearStoredGameState();
+    }
     setLatestPlacement(null);
     setState(createInitialState());
-  }, []);
+  }, [persistence]);
 
   const effects: DerivedEffects = useMemo(
     () => deriveEffects(state, latestPlacement),
