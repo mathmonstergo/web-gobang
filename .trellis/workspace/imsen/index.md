@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 10
+- **Total Sessions**: 11
 - **Last Active**: 2026-06-23
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~339 | Active |
+| `journal-1.md` | ~372 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 11 | 2026-06-23 | Fix online gameplay regressions | `3171d6d` | `online` |
 | 10 | 2026-06-23 | Online room invite multiplayer | `3f369f4`, `682101a` | `online` |
 | 9 | 2026-06-21 | Add Gobang effect audio | `a8ac28c` | `main` |
 | 8 | 2026-06-21 | Add mobile long press placement | `e1aa472` | `main` |

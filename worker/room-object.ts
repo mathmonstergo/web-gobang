@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 
 import {
+  cleanupRoomStateForAccess,
   disconnectPlayer,
   createInitialRoomState,
   getRoomJoinability,
@@ -18,6 +19,8 @@ import {
 import {
   type ClientMessage,
   type JoinRoomInput,
+  type OnlineNotificationEvent,
+  type OnlinePlayerColor,
   type OnlineRoomMutationResult,
   type OnlineRoomState,
   type ServerMessage
@@ -41,6 +44,7 @@ export class GobangRoom extends DurableObject<Env> {
     const metadata = getRoomMetadata(request);
 
     this.roomState = await this.loadRoomState(metadata.roomCode);
+    await this.cleanupLoadedRoomState(Date.now());
 
     const url = new URL(request.url);
     if (url.pathname === "/create" && request.method === "POST") {
@@ -87,6 +91,7 @@ export class GobangRoom extends DurableObject<Env> {
       avatarInitial,
       avatarColor
     };
+    const previousState = roomState;
     const joined = joinRoom(roomState, joinInput, Date.now());
     if (joined.success === false) {
       return Response.json(
@@ -96,6 +101,7 @@ export class GobangRoom extends DurableObject<Env> {
     }
 
     this.roomState = joined.state;
+    const previousPlayer = previousState.players[joined.player.color];
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
@@ -112,6 +118,21 @@ export class GobangRoom extends DurableObject<Env> {
     });
 
     await this.persistRoomState();
+    if (previousPlayer === undefined) {
+      this.sendNotificationToOpponent(
+        joined.state,
+        joined.player.color,
+        "opponent-joined",
+        "对手已加入"
+      );
+    } else if (previousPlayer.disconnectedAt !== null) {
+      this.sendNotificationToOpponent(
+        joined.state,
+        joined.player.color,
+        "opponent-reconnected",
+        "对手已重连"
+      );
+    }
     this.sendSnapshot(server, playerId);
     this.broadcastSnapshot();
 
@@ -138,6 +159,8 @@ export class GobangRoom extends DurableObject<Env> {
     }
 
     const now = Date.now();
+    await this.cleanupLoadedRoomState(now);
+    const previousState = this.requireRoomState();
     const result = this.applyClientMessage(session.playerId, message, now);
     if (result.success === false) {
       sendServerMessage(socket, {
@@ -150,6 +173,7 @@ export class GobangRoom extends DurableObject<Env> {
 
     this.roomState = result.state;
     await this.persistRoomState();
+    this.sendMutationNotifications(previousState, result.state, message);
     this.broadcastSnapshot();
   }
 
@@ -211,6 +235,15 @@ export class GobangRoom extends DurableObject<Env> {
       Date.now()
     );
     await this.persistRoomState();
+    const disconnectedColor = findPlayerColor(this.roomState, session.playerId);
+    if (disconnectedColor !== null) {
+      this.sendNotificationToOpponent(
+        this.roomState,
+        disconnectedColor,
+        "opponent-disconnected",
+        "对手已断线"
+      );
+    }
     this.broadcastSnapshot();
   }
 
@@ -229,6 +262,104 @@ export class GobangRoom extends DurableObject<Env> {
       type: "snapshot",
       state: toClientState(this.roomState, playerId, Date.now())
     });
+  }
+
+  private sendMutationNotifications(
+    previousState: OnlineRoomState,
+    nextState: OnlineRoomState,
+    message: ClientMessage
+  ): void {
+    if (previousState.phase !== "playing" && nextState.phase === "playing") {
+      this.sendNotificationToAll("game-started", "对局开始");
+    }
+
+    if (previousState.phase === "playing" && nextState.phase === "ended") {
+      this.sendNotificationToAll("game-ended", "对局结束");
+    }
+
+    if (
+      message.type === "request_undo" &&
+      previousState.pendingRequest === null &&
+      nextState.pendingRequest?.type === "undo"
+    ) {
+      this.sendNotificationToOpponent(
+        nextState,
+        nextState.pendingRequest.requestedBy,
+        "undo-requested",
+        "对方请求悔棋"
+      );
+    }
+
+    if (
+      message.type === "request_surrender" &&
+      previousState.pendingRequest === null &&
+      nextState.pendingRequest?.type === "surrender"
+    ) {
+      this.sendNotificationToOpponent(
+        nextState,
+        nextState.pendingRequest.requestedBy,
+        "surrender-requested",
+        "对方请求认输"
+      );
+    }
+
+    if (
+      message.type === "respond_undo" &&
+      previousState.pendingRequest?.type === "undo" &&
+      nextState.pendingRequest === null
+    ) {
+      this.sendNotificationToAll(
+        message.accept ? "undo-accepted" : "undo-rejected",
+        message.accept ? "悔棋已同意" : "悔棋已拒绝"
+      );
+    }
+
+    if (
+      message.type === "respond_surrender" &&
+      previousState.pendingRequest?.type === "surrender" &&
+      nextState.pendingRequest === null
+    ) {
+      this.sendNotificationToAll(
+        message.accept ? "surrender-accepted" : "surrender-rejected",
+        message.accept ? "认输已同意" : "认输已拒绝"
+      );
+    }
+
+    if (
+      message.type === "start_new_game" &&
+      previousState.phase === "ended" &&
+      nextState.gameNumber > previousState.gameNumber
+    ) {
+      this.sendNotificationToAll("new-game-started", "新局开始");
+    }
+  }
+
+  private sendNotificationToAll(
+    event: OnlineNotificationEvent,
+    text: string
+  ): void {
+    for (const socket of this.sockets.keys()) {
+      sendServerMessage(socket, { type: "notification", event, text });
+    }
+  }
+
+  private sendNotificationToOpponent(
+    state: OnlineRoomState,
+    requestedBy: OnlinePlayerColor,
+    event: OnlineNotificationEvent,
+    text: string
+  ): void {
+    const targetColor = requestedBy === "black" ? "white" : "black";
+    const targetPlayerId = state.players[targetColor]?.playerId;
+    if (targetPlayerId === undefined) {
+      return;
+    }
+
+    for (const [socket, session] of this.sockets) {
+      if (session.playerId === targetPlayerId) {
+        sendServerMessage(socket, { type: "notification", event, text });
+      }
+    }
   }
 
   private requireRoomState(): OnlineRoomState {
@@ -259,6 +390,21 @@ export class GobangRoom extends DurableObject<Env> {
     }
 
     await this.ctx.storage.put(ROOM_STATE_STORAGE_KEY, this.roomState);
+  }
+
+  private async cleanupLoadedRoomState(now: number): Promise<void> {
+    if (this.roomState === null) {
+      return;
+    }
+
+    const currentState = this.roomState;
+    const nextState = cleanupRoomStateForAccess(currentState, now);
+    if (nextState === currentState) {
+      return;
+    }
+
+    this.roomState = nextState;
+    await this.persistRoomState();
   }
 }
 
@@ -331,4 +477,19 @@ async function hashToken(token: string): Promise<string> {
   return Array.from(new Uint8Array(hashBuffer), (byte: number) =>
     byte.toString(16).padStart(2, "0")
   ).join("");
+}
+
+function findPlayerColor(
+  state: OnlineRoomState,
+  playerId: string
+): OnlinePlayerColor | null {
+  if (state.players.black?.playerId === playerId) {
+    return "black";
+  }
+
+  if (state.players.white?.playerId === playerId) {
+    return "white";
+  }
+
+  return null;
 }

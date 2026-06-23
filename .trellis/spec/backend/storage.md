@@ -585,11 +585,15 @@ const ROOM_STATE_STORAGE_KEY = "room-state-v1";
 type RoomState = {
   roomCode: string;
   isCreated: boolean;
+  createdAt: number;
+  hasEnteredPlaying: boolean;
   lastActivityAt: number;
 };
 
 async function loadRoomState(roomCode: string): Promise<RoomState>;
 async function persistRoomState(state: RoomState): Promise<void>;
+function normalizeRoomState(state: RoomState): RoomState;
+function cleanupRoomStateForAccess(state: RoomState, now: number): RoomState;
 ```
 
 ### 3. Contracts
@@ -604,6 +608,17 @@ async function persistRoomState(state: RoomState): Promise<void>;
   updated snapshot to `this.ctx.storage`.
 - Load path: every request path that needs room state must first load storage
   when the in-memory field is empty or belongs to a different room code.
+- Lifecycle cleanup is request-driven. Run `cleanupRoomStateForAccess` after
+  loading storage and before `/status`, WebSocket join, or client-message
+  handling. Do not add a global cron unless a separate room-code index and
+  proactive storage deletion are explicitly required.
+- Store enough lifecycle metadata for cleanup: `createdAt` is the actual room
+  creation time, and `hasEnteredPlaying` flips to true the first time stable
+  heartbeats transition the room into `playing`. A later rematch returning to
+  `stabilizing` must not reset `hasEnteredPlaying`.
+- Normalize older snapshots on access. If `createdAt` is missing, fall back to
+  `lastActivityAt`; if `hasEnteredPlaying` is missing, infer it from
+  `startedAt !== null`, `phase === "playing"`, or `phase === "ended"`.
 
 ### 4. Validation & Error Matrix
 
@@ -613,6 +628,9 @@ async function persistRoomState(state: RoomState): Promise<void>;
 | Stored snapshot `roomCode` differs from request room code | Ignore stored value and create default state for request room |
 | `/create` succeeds | Set `isCreated: true` and persist before responding |
 | `/status` after object recreation | Load persisted state and return created/joinable status |
+| `/status` sees disconnected slots older than reconnect window | Expire those slots before returning joinability |
+| Created room never reached `playing` and is older than pre-play TTL | Reset to a default uncreated room and return `not-found` |
+| Created room reached `playing` before | Do not expire it with the pre-play TTL; use player reconnect rules instead |
 | WebSocket join mutates player slots | Persist accepted join before broadcasting snapshots |
 | WebSocket close mutates connectivity | Persist disconnect state before broadcasting snapshots |
 
@@ -626,6 +644,12 @@ async function persistRoomState(state: RoomState): Promise<void>;
 - Bad: `isCreated` is stored only in a private class field; `POST /create`
   returns 201, but the next `/status` request initializes a fresh uncreated room
   and reports `not-found`.
+- Bad: disconnected player slots are expired only inside the join reducer, so
+  `/status` keeps returning `room-full` after the reconnect window and invite
+  validation blocks the next user.
+- Bad: a global cron scans room state to find stale pre-play rooms without a
+  real room-code index. This adds periodic load while still not fixing
+  correctness unless `/status` and join paths also clean on access.
 
 ### 6. Tests Required
 
@@ -636,6 +660,12 @@ async function persistRoomState(state: RoomState): Promise<void>;
   4. assert `exists: true`, `joinable: true`, and `reason: "joinable"`
 - Reducer tests should still cover pure state transitions separately from DO
   storage behavior.
+- Add reducer/Object tests for cleanup:
+  1. seeded full room with disconnected slots older than the reconnect window
+     returns `joinable` from `/status`
+  2. seeded room that never entered `playing` returns `not-found` after the
+     pre-play TTL
+  3. heartbeat transition to `playing` sets `hasEnteredPlaying: true`
 
 ### 7. Wrong vs Correct
 
@@ -664,6 +694,7 @@ class RoomObject extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     this.roomState = await this.loadRoomState(roomCode);
+    this.roomState = cleanupRoomStateForAccess(this.roomState, Date.now());
     if (new URL(request.url).pathname === "/create") {
       this.roomState = { ...this.roomState, isCreated: true };
       await this.ctx.storage.put(ROOM_STATE_STORAGE_KEY, this.roomState);

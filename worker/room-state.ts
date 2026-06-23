@@ -19,6 +19,7 @@ import {
 } from "./protocol";
 
 const RECONNECT_WINDOW_MS = 5 * 60 * 1000;
+const PRE_PLAY_ROOM_TTL_MS = 10 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 10 * 1000;
 const PLAYER_COLORS: readonly OnlinePlayerColor[] = ["black", "white"];
 
@@ -36,6 +37,8 @@ export function createInitialRoomState(
     endReason: null,
     pendingRequest: null,
     gameNumber: 1,
+    createdAt: now,
+    hasEnteredPlaying: false,
     startedAt: null,
     turnStartedAt: null,
     turnPausedAt: null,
@@ -51,6 +54,8 @@ export function markRoomCreated(
   return {
     ...state,
     isCreated: true,
+    createdAt: now,
+    hasEnteredPlaying: false,
     lastActivityAt: now
   };
 }
@@ -154,6 +159,7 @@ export function expireDisconnectedSlots(
   now: number
 ): OnlineRoomState {
   const players: Partial<Record<Player, OnlinePlayer>> = {};
+  let hasExpiredPlayer = false;
 
   for (const color of PLAYER_COLORS) {
     const player = state.players[color];
@@ -165,10 +171,15 @@ export function expireDisconnectedSlots(
       player.disconnectedAt !== null &&
       now - player.disconnectedAt > RECONNECT_WINDOW_MS
     ) {
+      hasExpiredPlayer = true;
       continue;
     }
 
     players[color] = player;
+  }
+
+  if (!hasExpiredPlayer) {
+    return state;
   }
 
   return {
@@ -176,6 +187,49 @@ export function expireDisconnectedSlots(
     players,
     phase: getPhaseForPlayers(players, state.phase),
     lastActivityAt: now
+  };
+}
+
+export function cleanupRoomStateForAccess(
+  state: OnlineRoomState,
+  now: number
+): OnlineRoomState {
+  const normalizedState = normalizeRoomState(state);
+  const stateWithoutExpiredSlots = expireDisconnectedSlots(normalizedState, now);
+
+  if (
+    stateWithoutExpiredSlots.isCreated &&
+    !stateWithoutExpiredSlots.hasEnteredPlaying &&
+    now - stateWithoutExpiredSlots.createdAt > PRE_PLAY_ROOM_TTL_MS
+  ) {
+    return createInitialRoomState(stateWithoutExpiredSlots.roomCode, now);
+  }
+
+  return stateWithoutExpiredSlots;
+}
+
+export function normalizeRoomState(state: OnlineRoomState): OnlineRoomState {
+  const persistedState = state as OnlineRoomState &
+    Partial<Pick<OnlineRoomState, "createdAt" | "hasEnteredPlaying">>;
+  if (
+    typeof persistedState.createdAt === "number" &&
+    typeof persistedState.hasEnteredPlaying === "boolean"
+  ) {
+    return state;
+  }
+
+  const hasStarted = state.startedAt !== null || state.phase === "playing" || state.phase === "ended";
+
+  return {
+    ...state,
+    createdAt:
+      typeof persistedState.createdAt === "number"
+        ? persistedState.createdAt
+        : state.lastActivityAt,
+    hasEnteredPlaying:
+      typeof persistedState.hasEnteredPlaying === "boolean"
+        ? persistedState.hasEnteredPlaying
+        : hasStarted
   };
 }
 
@@ -441,6 +495,7 @@ export function receiveHeartbeat(
       state: {
         ...nextState,
         phase: "playing",
+        hasEnteredPlaying: true,
         startedAt: now,
         turnStartedAt: now,
         turnPausedAt: null,
