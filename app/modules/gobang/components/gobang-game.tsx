@@ -6,6 +6,7 @@ import {
   type GobangBoardHandle,
   type ScreenPoint
 } from "@/modules/gobang/components/gobang-board";
+import { CommonModal } from "@/modules/gobang/components/common-modal";
 import { OnlineNotificationStack } from "@/modules/gobang/components/online-notification-stack";
 import {
   OnlineRoomDialog,
@@ -19,6 +20,7 @@ import { primeGobangAudio } from "@/modules/gobang/audio-effects";
 import { deriveEffects } from "@/modules/gobang/effects";
 import { useGobangGame } from "@/modules/gobang/hooks/use-gobang-game";
 import { useOnlineGobangRoom } from "@/modules/gobang/hooks/use-online-gobang-room";
+import { canLeaveOnlineMode } from "@/modules/gobang/online-mode-flow";
 import { parseInviteRoomCode } from "@/modules/gobang/online-room-client";
 import { loadOnlineProfile } from "@/modules/gobang/online-storage";
 import { type OnlineGamePhase } from "@/modules/gobang/online-types";
@@ -45,7 +47,9 @@ export function GobangGame(): ReactElement {
   const [isOnlineDialogOpen, setIsOnlineDialogOpen] = useState(
     initialOnlineRoomCode !== null
   );
+  const [isOnlineExitNoticeOpen, setIsOnlineExitNoticeOpen] = useState(false);
   const onlineSnapshot = onlineRoomClient.snapshot;
+  const onlineGamePhase: OnlineGamePhase | null = onlineSnapshot?.phase ?? null;
   const isOnlineRoomActive = onlineRoom !== null;
   const isUsingServerBoard =
     isOnlineRoomActive &&
@@ -179,6 +183,20 @@ export function GobangGame(): ReactElement {
     localGame.reset();
   };
   const handleOnlineEntry = (): void => {
+    if (isOnlineRoomActive) {
+      if (canLeaveOnlineMode(onlineGamePhase)) {
+        onlineRoomClient.leaveRoom();
+        setOnlineRoom(null);
+        setInitialOnlineRoomCode(null);
+        setIsOnlineDialogOpen(false);
+        setIsOnlineExitNoticeOpen(false);
+        return;
+      }
+
+      setIsOnlineExitNoticeOpen(true);
+      return;
+    }
+
     setInitialOnlineRoomCode(null);
     setIsOnlineDialogOpen(true);
   };
@@ -233,7 +251,7 @@ export function GobangGame(): ReactElement {
           <header className="game-header">
             <div className="game-title-row">
               <button
-                aria-label="进入联机模式"
+                aria-label={isOnlineRoomActive ? "返回单机模式" : "进入联机模式"}
                 className="game-title-button"
                 onClick={handleOnlineEntry}
                 type="button"
@@ -308,6 +326,28 @@ export function GobangGame(): ReactElement {
         }}
         onRoomReady={handleOnlineRoomReady}
       />
+      <CommonModal
+        isOpen={isOnlineExitNoticeOpen}
+        onClose={() => {
+          setIsOnlineExitNoticeOpen(false);
+        }}
+        title="正在对局"
+      >
+        <div className="online-dialog-stack">
+          <p className="online-modal-message">
+            对局进行中，暂时不能返回单机模式。
+          </p>
+          <button
+            className="online-primary-action"
+            onClick={() => {
+              setIsOnlineExitNoticeOpen(false);
+            }}
+            type="button"
+          >
+            知道了
+          </button>
+        </div>
+      </CommonModal>
       <OnlineNotificationStack notifications={onlineRoomClient.notifications} />
     </main>
   );

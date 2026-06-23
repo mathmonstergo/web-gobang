@@ -92,6 +92,8 @@ button {
 
 .game-title-button {
   appearance: none;
+  flex: 0 1 auto;
+  min-width: 0;
   border: 0;
   background: transparent;
   color: inherit;
@@ -130,6 +132,7 @@ button {
 
 .online-room-chip {
   display: inline-flex;
+  flex: 0 0 auto;
   min-height: 27px;
   align-items: center;
   gap: 6px;
@@ -148,6 +151,7 @@ button {
   letter-spacing: 0;
   padding: 5px 8px;
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
   transition:
     transform 140ms ease,
     border-color 140ms ease,
@@ -431,6 +435,15 @@ button {
   font-weight: 900;
   letter-spacing: 0;
   line-height: 1.2;
+  text-align: center;
+}
+
+.online-modal-message {
+  margin: 0;
+  color: rgba(246, 240, 223, 0.78);
+  font-size: 0.86rem;
+  font-weight: 800;
+  line-height: 1.55;
   text-align: center;
 }
 
@@ -732,9 +745,8 @@ button {
   }
 
   .game-title-row {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 7px;
+    align-items: flex-end;
+    gap: 8px;
   }
 
   .status-stack {
@@ -761,6 +773,10 @@ button {
 @media (max-width: 430px) {
   .game-header {
     flex-direction: column;
+  }
+
+  .game-title-row {
+    max-width: 100%;
   }
 
   .status-stack {
