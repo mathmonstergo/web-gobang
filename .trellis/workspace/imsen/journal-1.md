@@ -303,3 +303,37 @@ Reworked the Gobang board to use one fixed viewport canvas scene for board, ston
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: Online room invite multiplayer
+
+**Date**: 2026-06-23
+**Task**: Online room invite multiplayer
+**Branch**: `online`
+
+### Summary
+
+Added online invite rooms with Worker and Durable Object backend, direct invite-link joining, reusable online UI, tests, and Durable Object storage guidance.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3f369f4` | (see git log) |
+| `682101a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
