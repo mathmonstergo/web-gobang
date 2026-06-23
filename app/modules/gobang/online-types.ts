@@ -6,6 +6,7 @@ import {
   type OnlineGamePhase,
   type OnlineNotificationEvent,
   type OnlinePlayer,
+  type OnlinePlayerClock,
   type PendingRoomRequest,
   type ServerMessage
 } from "../../../worker/protocol";
@@ -16,6 +17,7 @@ export type {
   OnlineGamePhase,
   OnlineNotificationEvent,
   OnlinePlayer,
+  OnlinePlayerClock,
   PendingRoomRequest,
   ServerMessage
 };
@@ -46,6 +48,7 @@ export type OnlineRoomSnapshot = {
   phase: OnlineGamePhase;
   endReason: OnlineEndReason | null;
   pendingRequest: PendingRoomRequest | null;
+  clocks: Partial<Record<"black" | "white", OnlinePlayerClock>>;
   gameNumber: number;
   startedAt: number | null;
   turnStartedAt: number | null;
@@ -53,6 +56,7 @@ export type OnlineRoomSnapshot = {
   turnPausedDurationMs: number;
   serverNow: number;
   viewerColor: "black" | "white" | null;
+  canStart: boolean;
 };
 
 export type OnlineNotification = {

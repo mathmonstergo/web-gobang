@@ -10,6 +10,7 @@ import {
   type JoinRoomResult,
   type OnlineErrorCode,
   type OnlinePlayer,
+  type OnlinePlayerClock,
   type OnlinePlayerColor,
   type OnlineRoomClientState,
   type OnlineRoomMutationResult,
@@ -21,7 +22,15 @@ import {
 const RECONNECT_WINDOW_MS = 5 * 60 * 1000;
 const PRE_PLAY_ROOM_TTL_MS = 10 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 10 * 1000;
+const MOVE_CLOCK_MS = 45 * 1000;
+const GAME_CLOCK_MS = 10 * 60 * 1000;
 const PLAYER_COLORS: readonly OnlinePlayerColor[] = ["black", "white"];
+
+type PersistedOnlineRoomState = Omit<
+  OnlineRoomState,
+  "createdAt" | "hasEnteredPlaying" | "clocks"
+> &
+  Partial<Pick<OnlineRoomState, "createdAt" | "hasEnteredPlaying" | "clocks">>;
 
 export function createInitialRoomState(
   roomCode: string,
@@ -36,6 +45,7 @@ export function createInitialRoomState(
     phase: "waiting",
     endReason: null,
     pendingRequest: null,
+    clocks: {},
     gameNumber: 1,
     createdAt: now,
     hasEnteredPlaying: false,
@@ -81,7 +91,7 @@ export function joinRoom(
         { [currentColor]: nextPlayer },
         now
       );
-      return { success: true, state: resumeTurnIfReady(nextState, now), player: nextPlayer };
+      return { success: true, state: nextState, player: nextPlayer };
     }
   }
 
@@ -99,7 +109,7 @@ export function joinRoom(
         { [reusableColor]: nextPlayer },
         now
       );
-      return { success: true, state: resumeTurnIfReady(nextState, now), player: nextPlayer };
+      return { success: true, state: nextState, player: nextPlayer };
     }
   }
 
@@ -141,15 +151,12 @@ export function disconnectPlayer(
     isHeartbeatHealthy: false,
     disconnectedAt: now
   };
-  const shouldPauseTurn = state.phase === "playing" && state.turnPausedAt === null;
-
   return {
     ...state,
     players: {
       ...state.players,
       [color]: nextPlayer
     },
-    turnPausedAt: shouldPauseTurn ? now : state.turnPausedAt,
     lastActivityAt: now
   };
 }
@@ -208,14 +215,15 @@ export function cleanupRoomStateForAccess(
   return stateWithoutExpiredSlots;
 }
 
-export function normalizeRoomState(state: OnlineRoomState): OnlineRoomState {
-  const persistedState = state as OnlineRoomState &
-    Partial<Pick<OnlineRoomState, "createdAt" | "hasEnteredPlaying">>;
+export function normalizeRoomState(
+  state: PersistedOnlineRoomState
+): OnlineRoomState {
   if (
-    typeof persistedState.createdAt === "number" &&
-    typeof persistedState.hasEnteredPlaying === "boolean"
+    typeof state.createdAt === "number" &&
+    typeof state.hasEnteredPlaying === "boolean" &&
+    state.clocks !== undefined
   ) {
-    return state;
+    return state as OnlineRoomState;
   }
 
   const hasStarted = state.startedAt !== null || state.phase === "playing" || state.phase === "ended";
@@ -223,13 +231,14 @@ export function normalizeRoomState(state: OnlineRoomState): OnlineRoomState {
   return {
     ...state,
     createdAt:
-      typeof persistedState.createdAt === "number"
-        ? persistedState.createdAt
+      typeof state.createdAt === "number"
+        ? state.createdAt
         : state.lastActivityAt,
     hasEnteredPlaying:
-      typeof persistedState.hasEnteredPlaying === "boolean"
-        ? persistedState.hasEnteredPlaying
-        : hasStarted
+      typeof state.hasEnteredPlaying === "boolean"
+        ? state.hasEnteredPlaying
+        : hasStarted,
+    clocks: state.clocks ?? {}
   };
 }
 
@@ -251,28 +260,33 @@ export function placeOnlineStone(
   position: Position,
   now: number
 ): OnlineRoomMutationResult {
-  if (state.phase !== "playing") {
-    return failure(state, "not-playing");
+  const activeState = normalizeActiveTimeout(state, now);
+  if (activeState.phase !== "playing") {
+    if (state.phase === "playing" && activeState.phase === "ended") {
+      return { success: true, state: activeState };
+    }
+    return failure(activeState, "not-playing");
   }
 
-  const color = findPlayerColor(state, playerId);
+  const color = findPlayerColor(activeState, playerId);
   if (color === null) {
-    return failure(state, "invalid-player");
+    return failure(activeState, "invalid-player");
   }
 
-  if (color !== state.game.currentPlayer) {
-    return failure(state, "not-your-turn");
+  if (color !== activeState.game.currentPlayer) {
+    return failure(activeState, "not-your-turn");
   }
 
-  const moveResult = placeStone(state.game, position);
+  const clockedState = commitActiveClock(activeState, now);
+  const moveResult = placeStone(clockedState.game, position);
   if (moveResult.success === false) {
-    return failure(state, "illegal-move");
+    return failure(clockedState, "illegal-move");
   }
 
   return {
     success: true,
     state: {
-      ...state,
+      ...clockedState,
       game: moveResult.state,
       phase: moveResult.state.status === "won" ? "ended" : "playing",
       endReason:
@@ -293,27 +307,31 @@ export function requestUndo(
   playerId: string,
   now: number
 ): OnlineRoomMutationResult {
-  if (state.phase !== "playing") {
-    return failure(state, "not-playing");
+  const activeState = normalizeActiveTimeout(state, now);
+  if (activeState.phase !== "playing") {
+    if (state.phase === "playing" && activeState.phase === "ended") {
+      return { success: true, state: activeState };
+    }
+    return failure(activeState, "not-playing");
   }
 
-  const color = findPlayerColor(state, playerId);
-  const latestMove = state.game.moves.at(-1);
+  const color = findPlayerColor(activeState, playerId);
+  const latestMove = activeState.game.moves.at(-1);
   if (color === null || latestMove?.player !== color) {
-    return failure(state, "request-not-allowed");
+    return failure(activeState, "request-not-allowed");
   }
 
-  if (state.pendingRequest !== null) {
-    return failure(state, "request-not-allowed");
+  if (activeState.pendingRequest !== null) {
+    return failure(activeState, "request-not-allowed");
   }
 
   return {
     success: true,
     state: {
-      ...state,
+      ...activeState,
       pendingRequest: {
         type: "undo",
-        requestId: createRequestId("undo", state.gameNumber, now),
+        requestId: createRequestId("undo", activeState.gameNumber, now),
         requestedBy: color,
         targetMoveTurn: latestMove.turn,
         expiresAt: now + REQUEST_TIMEOUT_MS
@@ -330,41 +348,47 @@ export function respondUndo(
   accept: boolean,
   now: number
 ): OnlineRoomMutationResult {
-  const request = state.pendingRequest;
-  if (request?.type !== "undo" || request.requestId !== requestId) {
-    return failure(state, "request-not-found");
+  const activeState = normalizeActiveTimeout(state, now);
+  if (state.phase === "playing" && activeState.phase === "ended") {
+    return { success: true, state: activeState };
   }
 
-  const color = findPlayerColor(state, playerId);
+  const request = activeState.pendingRequest;
+  if (request?.type !== "undo" || request.requestId !== requestId) {
+    return failure(activeState, "request-not-found");
+  }
+
+  const color = findPlayerColor(activeState, playerId);
   if (color === null || color === request.requestedBy) {
-    return failure(state, "request-not-allowed");
+    return failure(activeState, "request-not-allowed");
   }
 
   if (now > request.expiresAt) {
     return {
       success: false,
       error: "request-expired",
-      state: { ...state, pendingRequest: null, lastActivityAt: now }
+      state: { ...activeState, pendingRequest: null, lastActivityAt: now }
     };
   }
 
   if (!accept) {
     return {
       success: true,
-      state: { ...state, pendingRequest: null, lastActivityAt: now }
+      state: { ...activeState, pendingRequest: null, lastActivityAt: now }
     };
   }
 
-  const latestMove = state.game.moves.at(-1);
+  const latestMove = activeState.game.moves.at(-1);
   if (latestMove?.turn !== request.targetMoveTurn) {
-    return failure(state, "request-stale");
+    return failure(activeState, "request-stale");
   }
+  const clockedState = commitActiveClock(activeState, now);
 
   return {
     success: true,
     state: {
-      ...state,
-      game: undoMove(state.game),
+      ...clockedState,
+      game: undoMove(clockedState.game),
       pendingRequest: null,
       turnStartedAt: now,
       turnPausedAt: null,
@@ -379,22 +403,26 @@ export function requestSurrender(
   playerId: string,
   now: number
 ): OnlineRoomMutationResult {
-  if (state.phase !== "playing") {
-    return failure(state, "not-playing");
+  const activeState = normalizeActiveTimeout(state, now);
+  if (activeState.phase !== "playing") {
+    if (state.phase === "playing" && activeState.phase === "ended") {
+      return { success: true, state: activeState };
+    }
+    return failure(activeState, "not-playing");
   }
 
-  const color = findPlayerColor(state, playerId);
-  if (color === null || state.pendingRequest !== null) {
-    return failure(state, "request-not-allowed");
+  const color = findPlayerColor(activeState, playerId);
+  if (color === null || activeState.pendingRequest !== null) {
+    return failure(activeState, "request-not-allowed");
   }
 
   return {
     success: true,
     state: {
-      ...state,
+      ...activeState,
       pendingRequest: {
         type: "surrender",
-        requestId: createRequestId("surrender", state.gameNumber, now),
+        requestId: createRequestId("surrender", activeState.gameNumber, now),
         requestedBy: color,
         expiresAt: now + REQUEST_TIMEOUT_MS
       },
@@ -410,37 +438,42 @@ export function respondSurrender(
   accept: boolean,
   now: number
 ): OnlineRoomMutationResult {
-  const request = state.pendingRequest;
+  const activeState = normalizeActiveTimeout(state, now);
+  if (state.phase === "playing" && activeState.phase === "ended") {
+    return { success: true, state: activeState };
+  }
+
+  const request = activeState.pendingRequest;
   if (
     request?.type !== "surrender" ||
     request.requestId !== requestId
   ) {
-    return failure(state, "request-not-found");
+    return failure(activeState, "request-not-found");
   }
 
-  const color = findPlayerColor(state, playerId);
+  const color = findPlayerColor(activeState, playerId);
   if (color === null || color === request.requestedBy) {
-    return failure(state, "request-not-allowed");
+    return failure(activeState, "request-not-allowed");
   }
 
   if (now > request.expiresAt) {
     return {
       success: false,
       error: "request-expired",
-      state: { ...state, pendingRequest: null, lastActivityAt: now }
+      state: { ...activeState, pendingRequest: null, lastActivityAt: now }
     };
   }
 
   if (!accept) {
     return {
       success: true,
-      state: { ...state, pendingRequest: null, lastActivityAt: now }
+      state: { ...activeState, pendingRequest: null, lastActivityAt: now }
     };
   }
 
   return {
     success: true,
-    state: createNextStabilizingGame(state, now)
+    state: createNextStabilizingGame(activeState, now)
   };
 }
 
@@ -475,7 +508,7 @@ export function receiveHeartbeat(
             isHeartbeatHealthy: true
           }
         };
-  const nextState: OnlineRoomState = {
+  const updatedState: OnlineRoomState = {
     ...state,
     players,
     heartbeats: {
@@ -484,45 +517,29 @@ export function receiveHeartbeat(
     },
     lastActivityAt: now
   };
-
-  if (
-    nextState.phase === "stabilizing" &&
-    hasStableHeartbeats(nextState) &&
-    areBothPlayersConnected(nextState.players)
-  ) {
-    return {
-      success: true,
-      state: {
-        ...nextState,
-        phase: "playing",
-        hasEnteredPlaying: true,
-        startedAt: now,
-        turnStartedAt: now,
-        turnPausedAt: null,
-        turnPausedDurationMs: 0
-      }
-    };
-  }
+  const nextState = normalizeActiveTimeout(updatedState, now);
 
   return { success: true, state: nextState };
 }
 
-export function startNewGame(
+export function startGame(
   state: OnlineRoomState,
   playerId: string,
-  now: number
+  now: number,
+  randomValue: number
 ): OnlineRoomMutationResult {
-  if (findPlayerColor(state, playerId) === null) {
-    return failure(state, "invalid-player");
+  const activeState = normalizeActiveTimeout(state, now);
+  if (findPlayerColor(activeState, playerId) === null) {
+    return failure(activeState, "invalid-player");
   }
 
-  if (state.phase !== "ended") {
-    return failure(state, "not-ended");
+  if (!canStartGame(activeState)) {
+    return failure(activeState, "request-not-allowed");
   }
 
   return {
     success: true,
-    state: createNextStabilizingGame(state, now)
+    state: createStartedGame(activeState, now, randomValue)
   };
 }
 
@@ -538,13 +555,15 @@ export function toClientState(
     phase: state.phase,
     endReason: state.endReason,
     pendingRequest: state.pendingRequest,
+    clocks: getClientClocks(state, serverNow),
     gameNumber: state.gameNumber,
     startedAt: state.startedAt,
     turnStartedAt: state.turnStartedAt,
     turnPausedAt: state.turnPausedAt,
     turnPausedDurationMs: state.turnPausedDurationMs,
     serverNow,
-    viewerColor: findPlayerColor(state, viewerPlayerId)
+    viewerColor: findPlayerColor(state, viewerPlayerId),
+    canStart: canStartGame(state)
   };
 }
 
@@ -562,24 +581,6 @@ function applyPlayers(
     ...state,
     players,
     phase: getPhaseForPlayers(players, state.phase),
-    lastActivityAt: now
-  };
-}
-
-function resumeTurnIfReady(state: OnlineRoomState, now: number): OnlineRoomState {
-  if (
-    state.phase !== "playing" ||
-    state.turnPausedAt === null ||
-    !areBothPlayersConnected(state.players)
-  ) {
-    return state;
-  }
-
-  return {
-    ...state,
-    turnPausedDurationMs:
-      state.turnPausedDurationMs + (now - state.turnPausedAt),
-    turnPausedAt: null,
     lastActivityAt: now
   };
 }
@@ -682,6 +683,53 @@ function hasStableHeartbeats(state: OnlineRoomState): boolean {
   );
 }
 
+export function canStartGame(state: OnlineRoomState): boolean {
+  return (
+    (state.phase === "stabilizing" || state.phase === "ended") &&
+    areBothPlayersConnected(state.players) &&
+    hasStableHeartbeats(state)
+  );
+}
+
+function createStartedGame(
+  state: OnlineRoomState,
+  now: number,
+  randomValue: number
+): OnlineRoomState {
+  const blackPlayer = state.players.black;
+  const whitePlayer = state.players.white;
+  if (blackPlayer === undefined || whitePlayer === undefined) {
+    return state;
+  }
+
+  const shouldSwap = randomValue >= 0.5;
+  const nextBlack = shouldSwap ? whitePlayer : blackPlayer;
+  const nextWhite = shouldSwap ? blackPlayer : whitePlayer;
+  const nextGameNumber =
+    state.phase === "ended" ? state.gameNumber + 1 : state.gameNumber;
+
+  return {
+    ...state,
+    players: {
+      black: { ...nextBlack, color: "black" },
+      white: { ...nextWhite, color: "white" }
+    },
+    game: createInitialState(),
+    phase: "playing",
+    endReason: null,
+    pendingRequest: null,
+    clocks: createInitialClocks(),
+    gameNumber: nextGameNumber,
+    heartbeats: state.phase === "ended" ? {} : state.heartbeats,
+    hasEnteredPlaying: true,
+    startedAt: now,
+    turnStartedAt: now,
+    turnPausedAt: null,
+    turnPausedDurationMs: 0,
+    lastActivityAt: now
+  };
+}
+
 function createNextStabilizingGame(
   state: OnlineRoomState,
   now: number
@@ -692,6 +740,7 @@ function createNextStabilizingGame(
     phase: areBothPlayersConnected(state.players) ? "stabilizing" : "waiting",
     endReason: null,
     pendingRequest: null,
+    clocks: {},
     gameNumber: state.gameNumber + 1,
     heartbeats: {},
     startedAt: null,
@@ -700,6 +749,138 @@ function createNextStabilizingGame(
     turnPausedDurationMs: 0,
     lastActivityAt: now
   };
+}
+
+function normalizeActiveTimeout(
+  state: OnlineRoomState,
+  now: number
+): OnlineRoomState {
+  if (state.phase !== "playing" || state.turnStartedAt === null) {
+    return state;
+  }
+
+  const currentPlayer = state.game.currentPlayer;
+  const clocks = getRequiredClocks(state);
+  const currentClock = clocks[currentPlayer];
+  const elapsedMs = getActiveTurnElapsedMs(state, now);
+  const stepRemainingMs = currentClock.stepRemainingMs - elapsedMs;
+  const gameRemainingMs = currentClock.gameRemainingMs - elapsedMs;
+
+  if (stepRemainingMs > 0 && gameRemainingMs > 0) {
+    return state;
+  }
+
+  const clock = stepRemainingMs <= 0 ? "step" : "game";
+  const timedOutBy = currentPlayer;
+  const winner = getOpponentColor(timedOutBy);
+
+  return {
+    ...state,
+    phase: "ended",
+    endReason: {
+      type: "timeout",
+      winner,
+      timedOutBy,
+      clock
+    },
+    pendingRequest: null,
+    clocks: {
+      ...clocks,
+      [currentPlayer]: {
+        stepRemainingMs: Math.max(0, stepRemainingMs),
+        gameRemainingMs: Math.max(0, gameRemainingMs)
+      }
+    },
+    turnStartedAt: now,
+    turnPausedAt: null,
+    turnPausedDurationMs: 0,
+    lastActivityAt: now
+  };
+}
+
+function commitActiveClock(
+  state: OnlineRoomState,
+  now: number
+): OnlineRoomState {
+  if (state.phase !== "playing" || state.turnStartedAt === null) {
+    return state;
+  }
+
+  const currentPlayer = state.game.currentPlayer;
+  const clocks = getRequiredClocks(state);
+  const currentClock = clocks[currentPlayer];
+  const elapsedMs = getActiveTurnElapsedMs(state, now);
+
+  return {
+    ...state,
+    clocks: {
+      ...clocks,
+      [currentPlayer]: {
+        stepRemainingMs: MOVE_CLOCK_MS,
+        gameRemainingMs: Math.max(0, currentClock.gameRemainingMs - elapsedMs)
+      }
+    }
+  };
+}
+
+function getClientClocks(
+  state: OnlineRoomState,
+  serverNow: number
+): Partial<Record<OnlinePlayerColor, OnlinePlayerClock>> {
+  if (state.phase !== "playing" || state.turnStartedAt === null) {
+    return state.clocks;
+  }
+
+  const currentPlayer = state.game.currentPlayer;
+  const clocks = getRequiredClocks(state);
+  const currentClock = clocks[currentPlayer];
+  const elapsedMs = getActiveTurnElapsedMs(state, serverNow);
+
+  return {
+    ...clocks,
+    [currentPlayer]: {
+      stepRemainingMs: Math.max(0, currentClock.stepRemainingMs - elapsedMs),
+      gameRemainingMs: Math.max(0, currentClock.gameRemainingMs - elapsedMs)
+    }
+  };
+}
+
+function getRequiredClocks(
+  state: OnlineRoomState
+): Record<OnlinePlayerColor, OnlinePlayerClock> {
+  return {
+    black: state.clocks.black ?? createInitialClock(),
+    white: state.clocks.white ?? createInitialClock()
+  };
+}
+
+function createInitialClocks(): Record<OnlinePlayerColor, OnlinePlayerClock> {
+  return {
+    black: createInitialClock(),
+    white: createInitialClock()
+  };
+}
+
+function createInitialClock(): OnlinePlayerClock {
+  return {
+    stepRemainingMs: MOVE_CLOCK_MS,
+    gameRemainingMs: GAME_CLOCK_MS
+  };
+}
+
+function getActiveTurnElapsedMs(
+  state: OnlineRoomState,
+  now: number
+): number {
+  if (state.turnStartedAt === null) {
+    return 0;
+  }
+
+  return Math.max(0, now - state.turnStartedAt);
+}
+
+function getOpponentColor(color: OnlinePlayerColor): OnlinePlayerColor {
+  return color === "black" ? "white" : "black";
 }
 
 function createRequestId(

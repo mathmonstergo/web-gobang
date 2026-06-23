@@ -46,6 +46,12 @@ export type OnlineEndReason =
       type: "surrender";
       winner: OnlinePlayerColor;
       surrenderedBy: OnlinePlayerColor;
+    }
+  | {
+      type: "timeout";
+      winner: OnlinePlayerColor;
+      timedOutBy: OnlinePlayerColor;
+      clock: "step" | "game";
     };
 
 export type OnlinePlayer = {
@@ -64,6 +70,11 @@ export type PlayerHeartbeatState = {
   generation: number;
   validCount: number;
   lastHeartbeatAt: number | null;
+};
+
+export type OnlinePlayerClock = {
+  stepRemainingMs: number;
+  gameRemainingMs: number;
 };
 
 export type PendingRoomRequest =
@@ -90,6 +101,7 @@ export type OnlineRoomState = {
   phase: OnlineGamePhase;
   endReason: OnlineEndReason | null;
   pendingRequest: PendingRoomRequest | null;
+  clocks: Partial<Record<OnlinePlayerColor, OnlinePlayerClock>>;
   gameNumber: number;
   createdAt: number;
   hasEnteredPlaying: boolean;
@@ -128,6 +140,7 @@ export type OnlineRoomClientState = {
   phase: OnlineGamePhase;
   endReason: OnlineEndReason | null;
   pendingRequest: PendingRoomRequest | null;
+  clocks: Partial<Record<OnlinePlayerColor, OnlinePlayerClock>>;
   gameNumber: number;
   startedAt: number | null;
   turnStartedAt: number | null;
@@ -135,6 +148,7 @@ export type OnlineRoomClientState = {
   turnPausedDurationMs: number;
   serverNow: number;
   viewerColor: OnlinePlayerColor | null;
+  canStart: boolean;
 };
 
 export type ClientMessage =
@@ -144,6 +158,7 @@ export type ClientMessage =
   | { type: "respond_undo"; requestId: string; accept: boolean }
   | { type: "request_surrender" }
   | { type: "respond_surrender"; requestId: string; accept: boolean }
+  | { type: "start_game" }
   | { type: "start_new_game" }
   | { type: "reset_animation_complete"; gameNumber: number };
 

@@ -5,7 +5,8 @@ import {
   disconnectPlayer,
   joinRoom,
   placeOnlineStone,
-  receiveHeartbeat
+  receiveHeartbeat,
+  startGame
 } from "./room-state";
 import {
   type ClientMessage,
@@ -112,12 +113,13 @@ describe("GobangRoom Durable Object", () => {
     }
   });
 
-  it("emits a game-started notification when heartbeats enter playing", async () => {
+  it("waits for explicit start and emits assigned color notifications", async () => {
     const storage = new TestStorage();
     const room = createRoomObject(storage);
     const blackSocket = new CapturingWebSocket();
     const whiteSocket = new CapturingWebSocket();
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(10);
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.9);
     const internals = getRoomInternals(room);
     internals.roomState = twoPlayerRoom();
     internals.sockets.set(blackSocket.asWebSocket(), { playerId: "black-id" });
@@ -139,10 +141,18 @@ describe("GobangRoom Durable Object", () => {
         });
       }
 
+      expect(notificationEvents(blackSocket)).not.toContain("game-started");
+      expect(notificationEvents(whiteSocket)).not.toContain("game-started");
+
+      await sendClientMessage(room, blackSocket, { type: "start_game" });
+
       expect(notificationEvents(blackSocket)).toContain("game-started");
       expect(notificationEvents(whiteSocket)).toContain("game-started");
+      expect(notificationTexts(blackSocket)).toContain("你本局随机为白棋");
+      expect(notificationTexts(whiteSocket)).toContain("你本局随机为黑棋");
     } finally {
       dateNow.mockRestore();
+      random.mockRestore();
     }
   });
 
@@ -151,6 +161,7 @@ describe("GobangRoom Durable Object", () => {
     const room = createRoomObject(storage);
     const blackSocket = new CapturingWebSocket();
     const whiteSocket = new CapturingWebSocket();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(21);
     const internals = getRoomInternals(room);
     internals.roomState = expectMutation(
       placeOnlineStone(playingRoom(10), "black-id", { row: 7, col: 7 }, 20)
@@ -158,9 +169,13 @@ describe("GobangRoom Durable Object", () => {
     internals.sockets.set(blackSocket.asWebSocket(), { playerId: "black-id" });
     internals.sockets.set(whiteSocket.asWebSocket(), { playerId: "white-id" });
 
-    await sendClientMessage(room, blackSocket, { type: "request_undo" });
+    try {
+      await sendClientMessage(room, blackSocket, { type: "request_undo" });
 
-    expect(notificationEvents(whiteSocket)).toContain("undo-requested");
+      expect(notificationEvents(whiteSocket)).toContain("undo-requested");
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("emits a game-ended notification when a move wins the game", async () => {
@@ -168,19 +183,24 @@ describe("GobangRoom Durable Object", () => {
     const room = createRoomObject(storage);
     const blackSocket = new CapturingWebSocket();
     const whiteSocket = new CapturingWebSocket();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(100);
     const internals = getRoomInternals(room);
     internals.roomState = almostWonByBlackRoom();
     internals.sockets.set(blackSocket.asWebSocket(), { playerId: "black-id" });
     internals.sockets.set(whiteSocket.asWebSocket(), { playerId: "white-id" });
 
-    await sendClientMessage(room, blackSocket, {
-      type: "place",
-      row: 7,
-      col: 11
-    });
+    try {
+      await sendClientMessage(room, blackSocket, {
+        type: "place",
+        row: 7,
+        col: 11
+      });
 
-    expect(notificationEvents(blackSocket)).toContain("game-ended");
-    expect(notificationEvents(whiteSocket)).toContain("game-ended");
+      expect(notificationEvents(blackSocket)).toContain("game-ended");
+      expect(notificationEvents(whiteSocket)).toContain("game-ended");
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("emits surrender request and accept notifications", async () => {
@@ -188,6 +208,7 @@ describe("GobangRoom Durable Object", () => {
     const room = createRoomObject(storage);
     const blackSocket = new CapturingWebSocket();
     const whiteSocket = new CapturingWebSocket();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(21);
     const internals = getRoomInternals(room);
     internals.roomState = expectMutation(
       placeOnlineStone(playingRoom(10), "black-id", { row: 7, col: 7 }, 20)
@@ -195,22 +216,27 @@ describe("GobangRoom Durable Object", () => {
     internals.sockets.set(blackSocket.asWebSocket(), { playerId: "black-id" });
     internals.sockets.set(whiteSocket.asWebSocket(), { playerId: "white-id" });
 
-    await sendClientMessage(room, blackSocket, { type: "request_surrender" });
+    try {
+      await sendClientMessage(room, blackSocket, { type: "request_surrender" });
 
-    expect(notificationEvents(whiteSocket)).toContain("surrender-requested");
-    const request = internals.roomState.pendingRequest;
-    if (request === null) {
-      throw new Error("Expected surrender request");
+      expect(notificationEvents(whiteSocket)).toContain("surrender-requested");
+      const request = internals.roomState.pendingRequest;
+      if (request === null) {
+        throw new Error("Expected surrender request");
+      }
+
+      dateNow.mockReturnValue(22);
+      await sendClientMessage(room, whiteSocket, {
+        type: "respond_surrender",
+        requestId: request.requestId,
+        accept: true
+      });
+
+      expect(notificationEvents(blackSocket)).toContain("surrender-accepted");
+      expect(notificationEvents(whiteSocket)).toContain("surrender-accepted");
+    } finally {
+      dateNow.mockRestore();
     }
-
-    await sendClientMessage(room, whiteSocket, {
-      type: "respond_surrender",
-      requestId: request.requestId,
-      accept: true
-    });
-
-    expect(notificationEvents(blackSocket)).toContain("surrender-accepted");
-    expect(notificationEvents(whiteSocket)).toContain("surrender-accepted");
   });
 
   it("emits a new-game-started notification when an ended game resets", async () => {
@@ -218,6 +244,7 @@ describe("GobangRoom Durable Object", () => {
     const room = createRoomObject(storage);
     const blackSocket = new CapturingWebSocket();
     const whiteSocket = new CapturingWebSocket();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(110);
     const internals = getRoomInternals(room);
     internals.roomState = expectMutation(
       placeOnlineStone(almostWonByBlackRoom(), "black-id", { row: 7, col: 11 }, 100)
@@ -225,10 +252,14 @@ describe("GobangRoom Durable Object", () => {
     internals.sockets.set(blackSocket.asWebSocket(), { playerId: "black-id" });
     internals.sockets.set(whiteSocket.asWebSocket(), { playerId: "white-id" });
 
-    await sendClientMessage(room, blackSocket, { type: "start_new_game" });
+    try {
+      await sendClientMessage(room, blackSocket, { type: "start_game" });
 
-    expect(notificationEvents(blackSocket)).toContain("new-game-started");
-    expect(notificationEvents(whiteSocket)).toContain("new-game-started");
+      expect(notificationEvents(blackSocket)).toContain("game-started");
+      expect(notificationEvents(whiteSocket)).toContain("game-started");
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("emits an opponent-disconnected notification on socket close", async () => {
@@ -291,6 +322,16 @@ function notificationEvents(socket: CapturingWebSocket): string[] {
     .map((message) => message.event);
 }
 
+function notificationTexts(socket: CapturingWebSocket): string[] {
+  return socket.messages
+    .map((message) => JSON.parse(message) as ServerMessage)
+    .filter(
+      (message): message is Extract<ServerMessage, { type: "notification" }> =>
+        message.type === "notification"
+    )
+    .map((message) => message.text);
+}
+
 function createRoomObject(storage: TestStorage): InstanceType<typeof GobangRoom> {
   return new GobangRoom(
     { storage } as unknown as DurableObjectState,
@@ -325,6 +366,10 @@ function twoPlayerRoom(): OnlineRoomState {
 }
 
 function playingRoom(startedAt: number): OnlineRoomState {
+  return expectMutation(startGame(stableRoom(startedAt), "black-id", startedAt, 0));
+}
+
+function stableRoom(startedAt: number): OnlineRoomState {
   let state = twoPlayerRoom();
   for (const playerId of ["black-id", "white-id"]) {
     for (let count = 0; count < 3; count += 1) {

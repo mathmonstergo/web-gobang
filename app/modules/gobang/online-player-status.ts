@@ -17,8 +17,6 @@ export function createOnlinePlayerStatusModels(
   snapshot: OnlineRoomSnapshot,
   now: number
 ): readonly OnlinePlayerStatusModel[] {
-  const timerText = createTimerText(snapshot, now);
-
   return PLAYER_ORDER.map((color: Player): OnlinePlayerStatusModel => {
     const player = snapshot.players[color];
     return {
@@ -30,7 +28,7 @@ export function createOnlinePlayerStatusModels(
         snapshot.phase === "playing" && snapshot.game.currentPlayer === color,
       isOnline:
         player?.isConnected === true && player.isHeartbeatHealthy === true,
-      timerText
+      timerText: createTimerText(snapshot, color, now)
     };
   });
 }
@@ -44,16 +42,22 @@ export function formatOnlineDuration(durationMs: number): string {
 
 function createTimerText(
   snapshot: OnlineRoomSnapshot,
+  color: Player,
   now: number
 ): string | null {
-  if (snapshot.startedAt === null || snapshot.turnStartedAt === null) {
+  const clock = snapshot.clocks[color];
+  if (snapshot.startedAt === null || clock === undefined) {
     return null;
   }
 
-  const gameTimeMs = now - snapshot.startedAt;
-  const moveClockNow = snapshot.turnPausedAt ?? now;
-  const moveTimeMs =
-    moveClockNow - snapshot.turnStartedAt - snapshot.turnPausedDurationMs;
+  const elapsedMs =
+    snapshot.phase === "playing" &&
+    snapshot.game.currentPlayer === color &&
+    snapshot.turnStartedAt !== null
+      ? Math.max(0, now - snapshot.turnStartedAt)
+      : 0;
+  const moveTimeMs = Math.max(0, clock.stepRemainingMs - elapsedMs);
+  const gameTimeMs = Math.max(0, clock.gameRemainingMs - elapsedMs);
 
   return `步时 ${formatOnlineDuration(moveTimeMs)} · 局时 ${formatOnlineDuration(gameTimeMs)}`;
 }

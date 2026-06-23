@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 
-export type RollingActionLabelValue = "新局" | "认输";
+export type RollingActionLabelValue = "新局" | "开始" | "认输";
 
 type RollingActionLabelProps = {
   label: RollingActionLabelValue;

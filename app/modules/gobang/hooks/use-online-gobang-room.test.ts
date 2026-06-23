@@ -56,14 +56,15 @@ describe("use online gobang room helpers", () => {
     expect(getHeartbeatIntervalMs(null)).toBe(1000);
     expect(getHeartbeatIntervalMs("waiting")).toBe(1000);
     expect(getHeartbeatIntervalMs("stabilizing")).toBe(1000);
-    expect(getHeartbeatIntervalMs("playing")).toBe(5000);
-    expect(getHeartbeatIntervalMs("ended")).toBe(5000);
+    expect(getHeartbeatIntervalMs("playing")).toBe(1000);
+    expect(getHeartbeatIntervalMs("ended")).toBe(1000);
   });
 
   it("does not serialize official gameplay messages before playing", () => {
     const stabilizingSnapshot = createSnapshot("stabilizing");
+    const readySnapshot = { ...stabilizingSnapshot, canStart: true };
     const playingSnapshot = createSnapshot("playing");
-    const endedSnapshot = createSnapshot("ended");
+    const endedSnapshot = { ...createSnapshot("ended"), canStart: true };
 
     expect(
       createOfficialClientMessage(stabilizingSnapshot, {
@@ -77,6 +78,16 @@ describe("use online gobang room helpers", () => {
       })
     ).toBeNull();
     expect(
+      createOfficialClientMessage(stabilizingSnapshot, {
+        type: "start_game"
+      })
+    ).toBeNull();
+    expect(
+      createOfficialClientMessage(readySnapshot, {
+        type: "start_game"
+      })
+    ).toEqual({ type: "start_game" });
+    expect(
       createOfficialClientMessage(playingSnapshot, {
         type: "place",
         position: { row: 7, col: 7 }
@@ -84,14 +95,14 @@ describe("use online gobang room helpers", () => {
     ).toEqual({ type: "place", row: 7, col: 7 });
     expect(
       createOfficialClientMessage(playingSnapshot, {
-        type: "start_new_game"
+        type: "start_game"
       })
     ).toBeNull();
     expect(
       createOfficialClientMessage(endedSnapshot, {
-        type: "start_new_game"
+        type: "start_game"
       })
-    ).toEqual({ type: "start_new_game" });
+    ).toEqual({ type: "start_game" });
   });
 });
 
@@ -103,12 +114,20 @@ function createSnapshot(phase: OnlineGamePhase): OnlineRoomSnapshot {
     phase,
     endReason: null,
     pendingRequest: null,
+    clocks:
+      phase === "playing"
+        ? {
+            black: { stepRemainingMs: 45_000, gameRemainingMs: 600_000 },
+            white: { stepRemainingMs: 45_000, gameRemainingMs: 600_000 }
+          }
+        : {},
     gameNumber: 1,
     startedAt: phase === "playing" ? 1000 : null,
     turnStartedAt: phase === "playing" ? 1000 : null,
     turnPausedAt: null,
     turnPausedDurationMs: 0,
     serverNow: 1000,
-    viewerColor: "black"
+    viewerColor: "black",
+    canStart: false
   };
 }

@@ -27,7 +27,6 @@ import {
 import { type Position } from "@/modules/gobang/types";
 
 const FAST_HEARTBEAT_INTERVAL_MS = 1000;
-const SLOW_HEARTBEAT_INTERVAL_MS = 5000;
 const RECONNECT_DELAY_MS = 1200;
 const ONLINE_NOTIFICATION_DURATION_MS = 3200;
 const OPEN_SOCKET_STATE = 1;
@@ -59,7 +58,7 @@ export type OfficialClientAction =
   | { type: "respond_undo"; requestId: string; accept: boolean }
   | { type: "request_surrender" }
   | { type: "respond_surrender"; requestId: string; accept: boolean }
-  | { type: "start_new_game" }
+  | { type: "start_game" }
   | { type: "reset_animation_complete"; gameNumber: number };
 
 export type OnlineRoomConnectionInput = {
@@ -104,6 +103,7 @@ export type UseOnlineGobangRoomResult = {
   respondUndo: (requestId: string, accept: boolean) => boolean;
   requestSurrender: () => boolean;
   respondSurrender: (requestId: string, accept: boolean) => boolean;
+  startGame: () => boolean;
   startNewGame: () => boolean;
   completeResetAnimation: (gameNumber: number) => boolean;
 };
@@ -454,10 +454,12 @@ export function useOnlineGobangRoom(
     [sendOfficialAction]
   );
 
-  const startNewGame = useCallback(
-    (): boolean => sendOfficialAction({ type: "start_new_game" }),
+  const startGame = useCallback(
+    (): boolean => sendOfficialAction({ type: "start_game" }),
     [sendOfficialAction]
   );
+
+  const startNewGame = startGame;
 
   const completeResetAnimation = useCallback(
     (gameNumber: number): boolean =>
@@ -481,6 +483,7 @@ export function useOnlineGobangRoom(
     respondUndo,
     requestSurrender,
     respondSurrender,
+    startGame,
     startNewGame,
     completeResetAnimation
   };
@@ -525,9 +528,8 @@ export function prepareOnlineRoomSession(
 export function getHeartbeatIntervalMs(
   phase: OnlineGamePhase | null
 ): number {
-  return phase === "playing" || phase === "ended" || phase === "resetting"
-    ? SLOW_HEARTBEAT_INTERVAL_MS
-    : FAST_HEARTBEAT_INTERVAL_MS;
+  void phase;
+  return FAST_HEARTBEAT_INTERVAL_MS;
 }
 
 export function createOfficialClientMessage(
@@ -545,8 +547,8 @@ export function createOfficialClientMessage(
     return null;
   }
 
-  if (action.type === "start_new_game") {
-    return snapshot.phase === "ended" ? { type: "start_new_game" } : null;
+  if (action.type === "start_game") {
+    return snapshot.canStart ? { type: "start_game" } : null;
   }
 
   if (snapshot.phase !== "playing") {

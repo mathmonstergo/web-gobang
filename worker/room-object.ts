@@ -13,7 +13,7 @@ import {
   requestUndo,
   respondSurrender,
   respondUndo,
-  startNewGame,
+  startGame,
   toClientState
 } from "./room-state";
 import {
@@ -214,8 +214,10 @@ export class GobangRoom extends DurableObject<Env> {
           message.accept,
           now
         );
+      case "start_game":
+        return startGame(roomState, playerId, now, Math.random());
       case "start_new_game":
-        return startNewGame(roomState, playerId, now);
+        return startGame(roomState, playerId, now, Math.random());
       case "reset_animation_complete":
         return { success: true, state: roomState };
     }
@@ -271,6 +273,7 @@ export class GobangRoom extends DurableObject<Env> {
   ): void {
     if (previousState.phase !== "playing" && nextState.phase === "playing") {
       this.sendNotificationToAll("game-started", "对局开始");
+      this.sendStartColorNotifications(nextState);
     }
 
     if (previousState.phase === "playing" && nextState.phase === "ended") {
@@ -325,12 +328,24 @@ export class GobangRoom extends DurableObject<Env> {
       );
     }
 
-    if (
-      message.type === "start_new_game" &&
-      previousState.phase === "ended" &&
-      nextState.gameNumber > previousState.gameNumber
-    ) {
-      this.sendNotificationToAll("new-game-started", "新局开始");
+  }
+
+  private sendStartColorNotifications(state: OnlineRoomState): void {
+    for (const color of ["black", "white"] as const) {
+      const playerId = state.players[color]?.playerId;
+      if (playerId === undefined) {
+        continue;
+      }
+
+      for (const [socket, session] of this.sockets) {
+        if (session.playerId === playerId) {
+          sendServerMessage(socket, {
+            type: "notification",
+            event: "game-started",
+            text: color === "black" ? "你本局随机为黑棋" : "你本局随机为白棋"
+          });
+        }
+      }
     }
   }
 
@@ -451,6 +466,7 @@ function isClientMessage(value: unknown): value is ClientMessage {
       return typeof candidate.gameNumber === "number";
     case "request_undo":
     case "request_surrender":
+    case "start_game":
     case "start_new_game":
       return true;
     case "respond_undo":

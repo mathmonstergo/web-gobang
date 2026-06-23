@@ -130,6 +130,7 @@ type ResetStoneSetup = {
 
 type ResetPhysicsStone = {
   id: string;
+  moveKey?: string;
   player: Player;
   x: number;
   y: number;
@@ -529,6 +530,7 @@ export const GobangBoard = forwardRef<GobangBoardHandle, GobangBoardProps>(
 
           resetPhysicsStonesRef.current.push({
             id: createAnimationId("reset-stone"),
+            moveKey: positionKey(setup.move),
             player: setup.move.player,
             x: setup.point.x,
             y: setup.point.y,
@@ -1155,10 +1157,23 @@ function drawMainCanvas(input: DrawMainCanvasInput): void {
   context.setTransform(dpr, 0, 0, dpr, 0, 0);
   context.clearRect(0, 0, sceneLayout.width, sceneLayout.height);
 
+  pruneHiddenKeys(input.hiddenKeysRef.current, input.state.moves);
+  updateResetPhysicsStones(
+    input.resetPhysicsStonesRef,
+    input.lastResetPhysicsTimestampRef,
+    input.layout,
+    input.sceneLayout,
+    input.timestamp,
+    input.deltaMs
+  );
+  syncActivatedResetStoneKeys(
+    input.hiddenKeysRef.current,
+    input.resetPhysicsStonesRef.current
+  );
+
   context.save();
   context.translate(sceneLayout.boardOffsetX, sceneLayout.boardOffsetY);
   drawBoard(context, layout);
-  pruneHiddenKeys(input.hiddenKeysRef.current, input.state.moves);
 
   const activeWaves: readonly CanvasWaveAnimation[] = input.wavesRef.current;
   const baseRadius: number = layout.cellSize * STONE_RADIUS_RATIO;
@@ -1208,14 +1223,6 @@ function drawMainCanvas(input: DrawMainCanvasInput): void {
   context.restore();
 
   drawResetWaveCrests(context, input.resetWaveCrestsRef, input.timestamp);
-  updateResetPhysicsStones(
-    input.resetPhysicsStonesRef,
-    input.lastResetPhysicsTimestampRef,
-    input.layout,
-    input.sceneLayout,
-    input.timestamp,
-    input.deltaMs
-  );
   drawResetPhysicsStones(
     context,
     input.resetPhysicsStonesRef.current
@@ -2431,7 +2438,7 @@ function drawResetPhysicsStones(
   stones: readonly ResetPhysicsStone[]
 ): void {
   for (const stone of stones) {
-    if (stone.alpha <= 0) {
+    if (!stone.isActivated || stone.alpha <= 0) {
       continue;
     }
 
@@ -2442,6 +2449,17 @@ function drawResetPhysicsStones(
     context.translate(-stone.x, -stone.y);
     drawStone(context, stone.x, stone.y, stone.radius, stone.player);
     context.restore();
+  }
+}
+
+function syncActivatedResetStoneKeys(
+  hiddenKeys: Set<string>,
+  stones: readonly ResetPhysicsStone[]
+): void {
+  for (const stone of stones) {
+    if (stone.isActivated && stone.moveKey !== undefined) {
+      hiddenKeys.add(stone.moveKey);
+    }
   }
 }
 
