@@ -31,7 +31,8 @@ import { parseInviteRoomCode } from "@/modules/gobang/online-room-client";
 import {
   deriveOnlinePlacementEffect,
   getOnlineBoardPreviewPlayer,
-  getOnlineResetTransition
+  getOnlineResetTransition,
+  getOnlineUndoTransition
 } from "@/modules/gobang/online-snapshot-effects";
 import { loadOnlineProfile } from "@/modules/gobang/online-storage";
 import {
@@ -49,6 +50,8 @@ import {
 export function GobangGame(): ReactElement {
   const localGame = useGobangGame();
   const warmupGame = useGobangGame({ persistence: "memory" });
+  const warmupState = warmupGame.state;
+  const resetWarmupGame = warmupGame.reset;
   const onlineRoomClient = useOnlineGobangRoom();
   const boardRef = useRef<GobangBoardHandle | null>(null);
   const resetButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -72,8 +75,6 @@ export function GobangGame(): ReactElement {
   const onlineSnapshot = onlineRoomClient.snapshot;
   const onlineGamePhase: OnlineGamePhase | null = onlineSnapshot?.phase ?? null;
   const isOnlineRoomActive = onlineRoom !== null;
-  const shouldShowOnlinePlayerStatus =
-    onlineSnapshot !== null && onlineSnapshot.startedAt !== null;
   const onlineResetTransition =
     onlineSnapshot === null
       ? null
@@ -81,6 +82,15 @@ export function GobangGame(): ReactElement {
           previousOnlineSnapshotRef.current,
           onlineSnapshot
         );
+  const onlineWarmupStartVisualGame =
+    onlineSnapshot !== null &&
+    previousOnlineSnapshotRef.current !== null &&
+    previousOnlineSnapshotRef.current.phase !== "playing" &&
+    onlineSnapshot.phase === "playing" &&
+    onlineSnapshot.game.moves.length === 0 &&
+    warmupState.moves.length > 0
+      ? warmupState
+      : null;
   const persistedOnlineResetVisual =
     onlineSnapshot !== null &&
     onlineResetVisual?.gameNumber === onlineSnapshot.gameNumber
@@ -89,6 +99,7 @@ export function GobangGame(): ReactElement {
   const onlineResetVisualGame: GameState | null =
     persistedOnlineResetVisual?.game ??
     onlineResetTransition?.visualGame ??
+    onlineWarmupStartVisualGame ??
     null;
   const isShowingOnlineResetVisual = onlineResetVisualGame !== null;
   const isUsingServerBoard =
@@ -113,7 +124,7 @@ export function GobangGame(): ReactElement {
     isUsingServerBoard
       ? onlineResetVisualGame ?? onlineSnapshot.game
       : isOnlineRoomActive
-        ? warmupGame.state
+        ? warmupState
         : localGame.state;
   const effects: DerivedEffects =
     isUsingServerBoard && onlineResetVisualGame !== null
@@ -144,15 +155,21 @@ export function GobangGame(): ReactElement {
   const canSendOnlineUndo =
     isUsingServerBoard && canRequestOnlineUndoAction;
   const resetActionLabel: RollingActionLabelValue =
-    isUsingServerBoard && onlineSnapshot.phase === "playing" ? "认输" : "新局";
+    isOnlineRoomActive
+      ? onlineSnapshot?.phase === "playing"
+        ? "认输"
+        : "开始"
+      : "新局";
   const isUndoDisabled =
     isResetPending ||
     (isUsingServerBoard ? !canSendOnlineUndo : state.moves.length === 0);
   const isResetDisabled =
     isResetPending ||
-    (isUsingServerBoard &&
-      onlineSnapshot.phase === "playing" &&
-      !canRequestOnlineSurrenderAction);
+    (isOnlineRoomActive &&
+      (onlineSnapshot === null ||
+        (onlineSnapshot.phase === "playing"
+          ? !canRequestOnlineSurrenderAction
+          : !onlineSnapshot.canStart)));
   const handleReset = (): void => {
     primeGobangAudio();
 
@@ -160,13 +177,13 @@ export function GobangGame(): ReactElement {
       return;
     }
 
-    if (isUsingServerBoard && onlineSnapshot.phase === "playing") {
+    if (isOnlineRoomActive && onlineSnapshot?.phase === "playing") {
       onlineRoomClient.requestSurrender();
       return;
     }
 
-    if (isUsingServerBoard && onlineSnapshot.phase === "ended") {
-      onlineRoomClient.startNewGame();
+    if (isOnlineRoomActive) {
+      onlineRoomClient.startGame();
       return;
     }
 
@@ -250,15 +267,12 @@ export function GobangGame(): ReactElement {
     localGame.placeAt(position);
   };
   const resetActiveBoard = (): void => {
-    if (isUsingServerBoard) {
-      if (onlineSnapshot.phase === "ended") {
-        onlineRoomClient.startNewGame();
-      }
+    if (isOnlineRoomActive && isUsingServerBoard) {
       return;
     }
 
     if (isOnlineRoomActive) {
-      warmupGame.reset();
+      resetWarmupGame();
       return;
     }
 
@@ -344,6 +358,14 @@ export function GobangGame(): ReactElement {
       previousOnlineSnapshotRef.current,
       onlineSnapshot
     );
+    const undoTransition = getOnlineUndoTransition(
+      previousOnlineSnapshotRef.current,
+      onlineSnapshot
+    );
+    if (undoTransition !== null) {
+      boardRef.current?.playUndoAnimation(undoTransition.removedMove);
+    }
+
     if (transition !== null) {
       if (onlineResetTimeoutRef.current !== null) {
         window.clearTimeout(onlineResetTimeoutRef.current);
@@ -381,8 +403,51 @@ export function GobangGame(): ReactElement {
       }
     }
 
+    const shouldAnimateWarmupStart =
+      previousOnlineSnapshotRef.current !== null &&
+      previousOnlineSnapshotRef.current.phase !== "playing" &&
+      onlineSnapshot.phase === "playing" &&
+    onlineSnapshot.game.moves.length === 0 &&
+      warmupState.moves.length > 0;
+    if (transition === null && shouldAnimateWarmupStart) {
+      if (onlineResetTimeoutRef.current !== null) {
+        window.clearTimeout(onlineResetTimeoutRef.current);
+        onlineResetTimeoutRef.current = null;
+      }
+
+      setOnlineResetVisual({
+        game: warmupState,
+        gameNumber: onlineSnapshot.gameNumber
+      });
+      setIsResetPending(true);
+
+      const delayMs: number = boardRef.current?.playResetAnimation(
+        warmupState.moves,
+        getElementCenter(resetButtonRef.current)
+      ) ?? 0;
+      resetWarmupGame();
+      const finishWarmupReset = (): void => {
+        onlineResetTimeoutRef.current = null;
+        setOnlineResetVisual((currentVisual) =>
+          currentVisual?.gameNumber === onlineSnapshot.gameNumber
+            ? null
+            : currentVisual
+        );
+        setIsResetPending(false);
+      };
+
+      if (delayMs <= 0) {
+        finishWarmupReset();
+      } else {
+        onlineResetTimeoutRef.current = window.setTimeout(
+          finishWarmupReset,
+          delayMs
+        );
+      }
+    }
+
     previousOnlineSnapshotRef.current = onlineSnapshot;
-  }, [completeOnlineResetAnimation, onlineSnapshot]);
+  }, [completeOnlineResetAnimation, onlineSnapshot, resetWarmupGame, warmupState]);
 
   return (
     <main className="app-shell">
@@ -414,16 +479,8 @@ export function GobangGame(): ReactElement {
                 </button>
               ) : null}
             </div>
-            <div
-              className={[
-                "status-stack",
-                shouldShowOnlinePlayerStatus ? "has-online-players" : ""
-              ].join(" ")}
-              aria-live="polite"
-            >
-              {shouldShowOnlinePlayerStatus ? (
-                <OnlinePlayerStatusPanel snapshot={onlineSnapshot} />
-              ) : (
+            {!isOnlineRoomActive ? (
+              <div className="status-stack" aria-live="polite">
                 <span
                   className={[
                     "status-pill",
@@ -434,8 +491,8 @@ export function GobangGame(): ReactElement {
                 >
                   {winnerLabel === null ? `${currentLabel}回合` : `${winnerLabel}胜`}
                 </span>
-              )}
-            </div>
+              </div>
+            ) : null}
           </header>
 
           <GobangBoard
@@ -447,26 +504,31 @@ export function GobangGame(): ReactElement {
             state={state}
           />
 
-          <div className="controls" aria-label="游戏控制">
-            <button
-              ref={resetButtonRef}
-              className="control-button primary"
-              disabled={isResetDisabled}
-              onClick={handleReset}
-              type="button"
-            >
-              <RefreshCcw aria-hidden="true" size={16} />
-              <RollingActionLabel label={resetActionLabel} />
-            </button>
-            <button
-              className="control-button"
-              disabled={isUndoDisabled}
-              onClick={handleUndo}
-              type="button"
-            >
-              <Undo2 aria-hidden="true" size={16} />
-              耍赖皮
-            </button>
+          <div className="online-controls-stack">
+            <div className="controls" aria-label="游戏控制">
+              <button
+                ref={resetButtonRef}
+                className="control-button primary"
+                disabled={isResetDisabled}
+                onClick={handleReset}
+                type="button"
+              >
+                <RefreshCcw aria-hidden="true" size={16} />
+                <RollingActionLabel label={resetActionLabel} />
+              </button>
+              <button
+                className="control-button"
+                disabled={isUndoDisabled}
+                onClick={handleUndo}
+                type="button"
+              >
+                <Undo2 aria-hidden="true" size={16} />
+                耍赖皮
+              </button>
+            </div>
+            {onlineSnapshot !== null ? (
+              <OnlinePlayerStatusPanel snapshot={onlineSnapshot} />
+            ) : null}
           </div>
         </div>
       </section>

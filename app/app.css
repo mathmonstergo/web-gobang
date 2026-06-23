@@ -390,6 +390,19 @@ button {
   z-index: 30;
 }
 
+.online-controls-stack {
+  display: grid;
+  width: min(100%, 378px);
+  justify-items: center;
+  gap: 9px;
+  position: relative;
+  z-index: 30;
+}
+
+.online-controls-stack .controls {
+  width: min(100%, 260px);
+}
+
 .control-button {
   display: inline-flex;
   min-height: 34px;

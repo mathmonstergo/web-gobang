@@ -84,6 +84,10 @@ function snapshot(
     phase: "playing",
     endReason: null,
     pendingRequest: null,
+    clocks: {
+      black: { stepRemainingMs: 45_000, gameRemainingMs: 600_000 },
+      white: { stepRemainingMs: 45_000, gameRemainingMs: 600_000 }
+    },
     gameNumber: 1,
     startedAt: 10,
     turnStartedAt: 10,
@@ -91,6 +95,7 @@ function snapshot(
     turnPausedDurationMs: 0,
     serverNow: 10,
     viewerColor: "black",
+    canStart: false,
     ...overrides
   };
 }

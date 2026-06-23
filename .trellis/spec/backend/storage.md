@@ -588,12 +588,25 @@ type RoomState = {
   createdAt: number;
   hasEnteredPlaying: boolean;
   lastActivityAt: number;
+  clocks?: Partial<Record<"black" | "white", OnlinePlayerClock>>;
+};
+
+type OnlinePlayerClock = {
+  stepRemainingMs: number;
+  gameRemainingMs: number;
 };
 
 async function loadRoomState(roomCode: string): Promise<RoomState>;
 async function persistRoomState(state: RoomState): Promise<void>;
 function normalizeRoomState(state: RoomState): RoomState;
 function cleanupRoomStateForAccess(state: RoomState, now: number): RoomState;
+function canStartGame(state: RoomState): boolean;
+function startGame(
+  state: RoomState,
+  playerId: string,
+  now: number,
+  randomValue: number,
+): RoomState;
 ```
 
 ### 3. Contracts
@@ -613,12 +626,24 @@ function cleanupRoomStateForAccess(state: RoomState, now: number): RoomState;
   handling. Do not add a global cron unless a separate room-code index and
   proactive storage deletion are explicitly required.
 - Store enough lifecycle metadata for cleanup: `createdAt` is the actual room
-  creation time, and `hasEnteredPlaying` flips to true the first time stable
-  heartbeats transition the room into `playing`. A later rematch returning to
+  creation time, and `hasEnteredPlaying` flips to true only when an explicit
+  accepted `start_game` mutation enters `playing`. Stable heartbeats are a
+  readiness signal, not a phase transition. A later rematch returning to
   `stabilizing` must not reset `hasEnteredPlaying`.
 - Normalize older snapshots on access. If `createdAt` is missing, fall back to
   `lastActivityAt`; if `hasEnteredPlaying` is missing, infer it from
   `startedAt !== null`, `phase === "playing"`, or `phase === "ended"`.
+- Expose online start readiness as derived client state such as `canStart`.
+  Do not persist `canStart`; recompute it from phase, occupied player slots,
+  connection state, and the required heartbeat counts for the current
+  `gameNumber`.
+- Persist service-owned countdown data with the room snapshot. Player clocks
+  are millisecond durations, not wall-clock timestamps. Active turn elapsed time
+  is derived from `turnStartedAt` plus the current request time.
+- Heartbeats for active games must run timeout normalization before returning a
+  snapshot, but they must not pause clocks. Disconnecting a player updates
+  connection state only; the current player's step and total game countdowns
+  continue until a move, timeout, or other end condition is processed.
 
 ### 4. Validation & Error Matrix
 
@@ -631,6 +656,11 @@ function cleanupRoomStateForAccess(state: RoomState, now: number): RoomState;
 | `/status` sees disconnected slots older than reconnect window | Expire those slots before returning joinability |
 | Created room never reached `playing` and is older than pre-play TTL | Reset to a default uncreated room and return `not-found` |
 | Created room reached `playing` before | Do not expire it with the pre-play TTL; use player reconnect rules instead |
+| Both players reach stable heartbeat count before start | Keep phase `stabilizing`; return derived `canStart: true` in client snapshots |
+| `start_game` arrives before `canStartGame(state)` | Reject or ignore without entering `playing` |
+| Accepted `start_game` from `stabilizing` or `ended` | Randomize black/white seats, clear board, initialize clocks, set `hasEnteredPlaying: true`, and persist before broadcast |
+| Active heartbeat or gameplay message finds a timed-out current player | Transition to `ended` with timeout reason and persist before broadcast |
+| Active player disconnects during their turn | Mark that player offline; do not pause `turnStartedAt` or clock countdowns |
 | WebSocket join mutates player slots | Persist accepted join before broadcasting snapshots |
 | WebSocket close mutates connectivity | Persist disconnect state before broadcasting snapshots |
 
@@ -650,6 +680,9 @@ function cleanupRoomStateForAccess(state: RoomState, now: number): RoomState;
 - Bad: a global cron scans room state to find stale pre-play rooms without a
   real room-code index. This adds periodic load while still not fixing
   correctness unless `/status` and join paths also clean on access.
+- Bad: stable heartbeats directly transition a room into `playing`; users see a
+  game start without an explicit `start_game` mutation and cannot verify start
+  readiness through the UI first.
 
 ### 6. Tests Required
 
@@ -665,7 +698,12 @@ function cleanupRoomStateForAccess(state: RoomState, now: number): RoomState;
      returns `joinable` from `/status`
   2. seeded room that never entered `playing` returns `not-found` after the
      pre-play TTL
-  3. heartbeat transition to `playing` sets `hasEnteredPlaying: true`
+  3. stable heartbeats keep the phase pre-play while the client snapshot exposes
+     `canStart: true`
+  4. accepted `start_game` sets `hasEnteredPlaying: true`, initializes clocks,
+     and persists the state
+  5. heartbeat or gameplay timeout ends the active game without pausing for
+     disconnected players
 
 ### 7. Wrong vs Correct
 
@@ -702,6 +740,26 @@ class RoomObject extends DurableObject<Env> {
     }
     return Response.json(getJoinability(this.roomState));
   }
+}
+```
+
+#### Correct
+
+```typescript
+function receiveHeartbeat(state: RoomState, playerId: string, now: number): RoomState {
+  const nextState = normalizeTimeout(state, now);
+  return updateHeartbeat(nextState, playerId, now);
+}
+
+function handleClientMessage(state: RoomState, message: ClientMessage, now: number): RoomState {
+  if (message.type === "start_game") {
+    if (!canStartGame(state)) {
+      return state;
+    }
+    return startGame(state, message.playerId, now, Math.random());
+  }
+
+  return applyPlayingMutation(normalizeTimeout(state, now), message, now);
 }
 ```
 

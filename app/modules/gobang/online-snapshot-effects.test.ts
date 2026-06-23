@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   deriveOnlinePlacementEffect,
   getOnlineBoardPreviewPlayer,
-  getOnlineResetTransition
+  getOnlineResetTransition,
+  getOnlineUndoTransition
 } from "@/modules/gobang/online-snapshot-effects";
 import {
   createInitialState,
@@ -55,6 +56,21 @@ describe("online snapshot effects", () => {
     });
   });
 
+  it("detects accepted undo transitions so clients can animate the removed stone", () => {
+    const removedMove = move("black", 7, 7, 1);
+    const previous = snapshot({
+      game: gameFromMoves([removedMove])
+    });
+    const current = snapshot({
+      game: createInitialState()
+    });
+
+    expect(getOnlineUndoTransition(previous, current)).toEqual({
+      gameNumber: 1,
+      removedMove
+    });
+  });
+
   it("uses viewer color for online preview only on the viewer turn", () => {
     expect(
       getOnlineBoardPreviewPlayer(
@@ -88,6 +104,10 @@ function snapshot(
     phase: "playing",
     endReason: null,
     pendingRequest: null,
+    clocks: {
+      black: { stepRemainingMs: 45_000, gameRemainingMs: 600_000 },
+      white: { stepRemainingMs: 45_000, gameRemainingMs: 600_000 }
+    },
     gameNumber: 1,
     startedAt: 10,
     turnStartedAt: 10,
@@ -95,6 +115,7 @@ function snapshot(
     turnPausedDurationMs: 0,
     serverNow: 10,
     viewerColor: "black",
+    canStart: false,
     ...overrides
   };
 }

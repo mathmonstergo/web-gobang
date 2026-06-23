@@ -12,6 +12,11 @@ export type OnlineResetTransition = {
   visualGame: GameState;
 };
 
+export type OnlineUndoTransition = {
+  gameNumber: number;
+  removedMove: Move;
+};
+
 export function deriveOnlinePlacementEffect(
   previous: OnlineRoomSnapshot | null,
   current: OnlineRoomSnapshot
@@ -65,6 +70,35 @@ export function getOnlineResetTransition(
   };
 }
 
+export function getOnlineUndoTransition(
+  previous: OnlineRoomSnapshot | null,
+  current: OnlineRoomSnapshot
+): OnlineUndoTransition | null {
+  if (previous?.gameNumber !== current.gameNumber) {
+    return null;
+  }
+
+  if (previous.game.moves.length !== current.game.moves.length + 1) {
+    return null;
+  }
+
+  for (let index = 0; index < current.game.moves.length; index += 1) {
+    if (!areSameMove(previous.game.moves[index], current.game.moves[index])) {
+      return null;
+    }
+  }
+
+  const removedMove = previous.game.moves.at(-1);
+  if (removedMove === undefined) {
+    return null;
+  }
+
+  return {
+    gameNumber: current.gameNumber,
+    removedMove
+  };
+}
+
 export function getOnlineBoardPreviewPlayer(
   snapshot: OnlineRoomSnapshot
 ): Player | null {
@@ -78,4 +112,13 @@ export function getOnlineBoardPreviewPlayer(
   }
 
   return snapshot.viewerColor;
+}
+
+function areSameMove(left: Move, right: Move): boolean {
+  return (
+    left.turn === right.turn &&
+    left.player === right.player &&
+    left.row === right.row &&
+    left.col === right.col
+  );
 }

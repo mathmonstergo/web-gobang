@@ -13,7 +13,8 @@ import {
   requestUndo,
   respondSurrender,
   respondUndo,
-  startNewGame
+  startGame,
+  toClientState
 } from "./room-state";
 import { type OnlineRoomState } from "./protocol";
 
@@ -51,12 +52,12 @@ describe("online room state", () => {
     const place = placeOnlineStone(state, "black-id", { row: 7, col: 7 }, 10);
     const undo = requestUndo(state, "black-id", 10);
     const surrender = requestSurrender(state, "black-id", 10);
-    const newGame = startNewGame(state, "black-id", 10);
+    const start = startGame(state, "black-id", 10, 0);
 
     expect(place).toMatchObject({ success: false, error: "not-playing" });
     expect(undo).toMatchObject({ success: false, error: "not-playing" });
     expect(surrender).toMatchObject({ success: false, error: "not-playing" });
-    expect(newGame).toMatchObject({ success: false, error: "not-ended" });
+    expect(start).toMatchObject({ success: false, error: "request-not-allowed" });
     expect(state.game).toEqual(createInitialState());
     expect(state.pendingRequest).toBeNull();
     expect(state.startedAt).toBeNull();
@@ -64,7 +65,7 @@ describe("online room state", () => {
     expect(state.gameNumber).toBe(1);
   });
 
-  it("starts only after both players send three valid heartbeats", () => {
+  it("does not auto-start after both players send three valid heartbeats", () => {
     let state = twoPlayerRoom();
 
     state = expectMutation(
@@ -89,36 +90,80 @@ describe("online room state", () => {
       receiveHeartbeat(state, "white-id", state.gameNumber, 15)
     );
 
-    expect(state.phase).toBe("playing");
-    expect(state.startedAt).toBe(15);
-    expect(state.turnStartedAt).toBe(15);
-    expect(state).toMatchObject({ hasEnteredPlaying: true });
+    expect(state.phase).toBe("stabilizing");
+    expect(state.startedAt).toBeNull();
+    expect(toClientState(state, "black-id", 15).canStart).toBe(true);
   });
 
-  it("resets turn timer anchors after accepted moves", () => {
-    const state = playingRoom(20);
-    const result = placeOnlineStone(state, "black-id", { row: 7, col: 7 }, 30);
+  it("starts explicitly after stable heartbeats and initializes clocks", () => {
+    const state = stableRoom(15);
+    const result = startGame(state, "black-id", 20, 0);
 
     expect(result.success).toBe(true);
     if (result.success === false) {
       return;
     }
 
-    expect(result.state.turnStartedAt).toBe(30);
-    expect(result.state.turnPausedAt).toBeNull();
-    expect(result.state.turnPausedDurationMs).toBe(0);
+    expect(result.state.phase).toBe("playing");
+    expect(result.state.startedAt).toBe(20);
+    expect(result.state.turnStartedAt).toBe(20);
+    expect(result.state).toMatchObject({ hasEnteredPlaying: true });
+    expect(result.state.clocks).toEqual({
+      black: { stepRemainingMs: 45_000, gameRemainingMs: 600_000 },
+      white: { stepRemainingMs: 45_000, gameRemainingMs: 600_000 }
+    });
   });
 
-  it("pauses move time on disconnect while game time remains anchored", () => {
-    const disconnected = disconnectPlayer(playingRoom(100), "white-id", 140);
+  it("randomizes black and white seats when an official game starts", () => {
+    const stable = stableRoom(15);
+    const kept = expectMutation(startGame(stable, "black-id", 20, 0.1));
+    const swapped = expectMutation(startGame(stable, "black-id", 20, 0.9));
 
-    expect(disconnected.startedAt).toBe(100);
-    expect(disconnected.turnPausedAt).toBe(140);
+    expect(kept.players.black?.playerId).toBe("black-id");
+    expect(kept.players.white?.playerId).toBe("white-id");
+    expect(swapped.players.black?.playerId).toBe("white-id");
+    expect(swapped.players.white?.playerId).toBe("black-id");
+    expect(swapped.players.black?.color).toBe("black");
+    expect(swapped.players.white?.color).toBe("white");
+  });
+
+  it("deducts the active player clock after accepted moves", () => {
+    const state = playingRoom(20_000);
+    const result = placeOnlineStone(state, "black-id", { row: 7, col: 7 }, 30_000);
+
+    expect(result.success).toBe(true);
+    if (result.success === false) {
+      return;
+    }
+
+    expect(result.state.turnStartedAt).toBe(30_000);
+    expect(result.state.turnPausedAt).toBeNull();
+    expect(result.state.turnPausedDurationMs).toBe(0);
+    expect(result.state.clocks.black).toEqual({
+      stepRemainingMs: 45_000,
+      gameRemainingMs: 590_000
+    });
+    expect(result.state.clocks.white).toEqual({
+      stepRemainingMs: 45_000,
+      gameRemainingMs: 600_000
+    });
+  });
+
+  it("does not pause clocks on disconnect", () => {
+    const disconnected = disconnectPlayer(playingRoom(100_000), "white-id", 140_000);
+
+    expect(disconnected.startedAt).toBe(100_000);
+    expect(disconnected.turnPausedAt).toBeNull();
+    expect(disconnected.turnPausedDurationMs).toBe(0);
+    expect(toClientState(disconnected, "black-id", 140_000).clocks.black).toEqual({
+      stepRemainingMs: 5_000,
+      gameRemainingMs: 560_000
+    });
 
     const rejoined = joinRoom(
       disconnected,
       playerInput("white-id", "Lin"),
-      190
+      190_000
     );
     expect(rejoined.success).toBe(true);
     if (rejoined.success === false) {
@@ -126,7 +171,53 @@ describe("online room state", () => {
     }
 
     expect(rejoined.state.turnPausedAt).toBeNull();
-    expect(rejoined.state.turnPausedDurationMs).toBe(50);
+    expect(rejoined.state.turnPausedDurationMs).toBe(0);
+  });
+
+  it("ends the game when the current player step clock expires", () => {
+    const timedOut = receiveHeartbeat(
+      playingRoom(100),
+      "white-id",
+      1,
+      45_100
+    );
+
+    expect(timedOut.success).toBe(true);
+    if (timedOut.success === false) {
+      return;
+    }
+
+    expect(timedOut.state.phase).toBe("ended");
+    expect(timedOut.state.endReason).toEqual({
+      type: "timeout",
+      winner: "white",
+      timedOutBy: "black",
+      clock: "step"
+    });
+  });
+
+  it("ends the game when the current player game clock expires", () => {
+    const state = {
+      ...playingRoom(100),
+      clocks: {
+        black: { stepRemainingMs: 45_000, gameRemainingMs: 1_000 },
+        white: { stepRemainingMs: 45_000, gameRemainingMs: 600_000 }
+      }
+    };
+    const timedOut = receiveHeartbeat(state, "white-id", 1, 1_100);
+
+    expect(timedOut.success).toBe(true);
+    if (timedOut.success === false) {
+      return;
+    }
+
+    expect(timedOut.state.phase).toBe("ended");
+    expect(timedOut.state.endReason).toEqual({
+      type: "timeout",
+      winner: "white",
+      timedOutBy: "black",
+      clock: "game"
+    });
   });
 
   it("rejects a third player while two slots are occupied", () => {
@@ -258,6 +349,10 @@ function twoPlayerRoom(): OnlineRoomState {
 }
 
 function playingRoom(startedAt: number): OnlineRoomState {
+  return expectMutation(startGame(stableRoom(startedAt), "black-id", startedAt, 0));
+}
+
+function stableRoom(startedAt: number): OnlineRoomState {
   let state = twoPlayerRoom();
   for (const playerId of ["black-id", "white-id"]) {
     for (let count = 0; count < 3; count += 1) {

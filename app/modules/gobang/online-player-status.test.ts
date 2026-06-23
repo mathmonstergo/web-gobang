@@ -14,19 +14,21 @@ describe("online player status", () => {
     expect(formatOnlineDuration(3_725_000)).toBe("62:05");
   });
 
-  it("pauses move time while keeping game time running", () => {
+  it("shows independent countdowns for the active and inactive players", () => {
     const models = createOnlinePlayerStatusModels(
       snapshot({
         startedAt: 1_000,
         turnStartedAt: 2_000,
-        turnPausedAt: 5_000,
-        turnPausedDurationMs: 0
+        clocks: {
+          black: { stepRemainingMs: 45_000, gameRemainingMs: 600_000 },
+          white: { stepRemainingMs: 45_000, gameRemainingMs: 600_000 }
+        }
       }),
-      9_000
+      12_000
     );
 
-    expect(models[0]?.timerText).toBe("步时 00:03 · 局时 00:08");
-    expect(models[1]?.timerText).toBe("步时 00:03 · 局时 00:08");
+    expect(models[0]?.timerText).toBe("步时 00:35 · 局时 09:50");
+    expect(models[1]?.timerText).toBe("步时 00:45 · 局时 10:00");
   });
 
   it("marks the current turn and connection health per player", () => {
@@ -82,6 +84,10 @@ function snapshot(
     phase: "playing",
     endReason: null,
     pendingRequest: null,
+    clocks: {
+      black: { stepRemainingMs: 45_000, gameRemainingMs: 600_000 },
+      white: { stepRemainingMs: 45_000, gameRemainingMs: 600_000 }
+    },
     gameNumber: 1,
     startedAt: 1_000,
     turnStartedAt: 1_000,
@@ -89,6 +95,7 @@ function snapshot(
     turnPausedDurationMs: 0,
     serverNow: 10_000,
     viewerColor: "black",
+    canStart: false,
     ...overrides
   };
 }
