@@ -565,6 +565,115 @@ binding = "MY_KV"
 id = "your-kv-namespace-id"
 ```
 
+## Scenario: Durable Object Room State Snapshots
+
+### 1. Scope / Trigger
+
+- Trigger: real-time room or session state is owned by a Durable Object and must
+  survive object instance recreation, Wrangler local reloads, and short runtime
+  lifecycle changes.
+- Use this for small authoritative state such as room creation markers, player
+  slots, reconnect windows, pending request timestamps, and board snapshots.
+- Do not rely on class private fields alone for any state that an HTTP
+  validation route or a reconnecting WebSocket must observe later.
+
+### 2. Signatures
+
+```typescript
+const ROOM_STATE_STORAGE_KEY = "room-state-v1";
+
+type RoomState = {
+  roomCode: string;
+  isCreated: boolean;
+  lastActivityAt: number;
+};
+
+async function loadRoomState(roomCode: string): Promise<RoomState>;
+async function persistRoomState(state: RoomState): Promise<void>;
+```
+
+### 3. Contracts
+
+- Durable Object id: derive from stable room identity, for example
+  `env.ROOMS.idFromName(roomCode)`.
+- Storage key: use one versioned key per room object, for example
+  `room-state-v1`.
+- Stored value: JSON-serializable object using Unix millisecond timestamps.
+- In-memory cache: private fields are allowed as a per-instance cache, but every
+  mutating API/WebSocket path that changes authoritative state must write the
+  updated snapshot to `this.ctx.storage`.
+- Load path: every request path that needs room state must first load storage
+  when the in-memory field is empty or belongs to a different room code.
+
+### 4. Validation & Error Matrix
+
+| Condition | Behavior |
+| --- | --- |
+| No stored snapshot and no in-memory snapshot | Create a default uncreated room state |
+| Stored snapshot `roomCode` differs from request room code | Ignore stored value and create default state for request room |
+| `/create` succeeds | Set `isCreated: true` and persist before responding |
+| `/status` after object recreation | Load persisted state and return created/joinable status |
+| WebSocket join mutates player slots | Persist accepted join before broadcasting snapshots |
+| WebSocket close mutates connectivity | Persist disconnect state before broadcasting snapshots |
+
+### 5. Good/Base/Bad Cases
+
+- Good: `POST /api/rooms` calls the room DO `/create`, persists
+  `{ isCreated: true }`, and a later `GET /api/rooms/:roomCode` from a fresh DO
+  instance returns `exists: true`.
+- Base: pure ephemeral UI state or non-authoritative display effects may stay
+  in the browser only.
+- Bad: `isCreated` is stored only in a private class field; `POST /create`
+  returns 201, but the next `/status` request initializes a fresh uncreated room
+  and reports `not-found`.
+
+### 6. Tests Required
+
+- Unit/integration test with shared fake DO storage:
+  1. create one DO instance and call `/create`
+  2. create a second DO instance with the same fake storage
+  3. call `/status`
+  4. assert `exists: true`, `joinable: true`, and `reason: "joinable"`
+- Reducer tests should still cover pure state transitions separately from DO
+  storage behavior.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+class RoomObject extends DurableObject<Env> {
+  private roomState: RoomState | null = null;
+
+  async fetch(request: Request): Promise<Response> {
+    this.roomState ??= createInitialRoomState(roomCode);
+    if (new URL(request.url).pathname === "/create") {
+      this.roomState = { ...this.roomState, isCreated: true };
+      return Response.json({ success: true });
+    }
+    return Response.json(getJoinability(this.roomState));
+  }
+}
+```
+
+#### Correct
+
+```typescript
+class RoomObject extends DurableObject<Env> {
+  private roomState: RoomState | null = null;
+
+  async fetch(request: Request): Promise<Response> {
+    this.roomState = await this.loadRoomState(roomCode);
+    if (new URL(request.url).pathname === "/create") {
+      this.roomState = { ...this.roomState, isCreated: true };
+      await this.ctx.storage.put(ROOM_STATE_STORAGE_KEY, this.roomState);
+      return Response.json({ success: true });
+    }
+    return Response.json(getJoinability(this.roomState));
+  }
+}
+```
+
 ## Reference
 
 - [Cloudflare Cache API](https://developers.cloudflare.com/workers/runtime-apis/cache/)
