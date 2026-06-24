@@ -11,6 +11,18 @@ export default defineConfig({
       "@shared": fileURLToPath(new URL("./shared", import.meta.url))
     }
   },
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://localhost:8787",
+        changeOrigin: true
+      },
+      "/ws": {
+        target: "ws://localhost:8787",
+        ws: true
+      }
+    }
+  },
   test: {
     environment: "node",
     include: ["app/**/*.test.ts", "shared/**/*.test.ts", "worker/**/*.test.ts"]

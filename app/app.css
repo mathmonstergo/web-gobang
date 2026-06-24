@@ -1061,6 +1061,9 @@ button {
   .common-modal-panel {
     width: min(92vw, 360px);
     padding: 20px;
+    min-height: unset;  /* Remove fixed min-height on mobile */
+    max-height: 85vh;   /* Prevent overflow on small screens */
+    overflow-y: auto;   /* Allow scrolling if content is too tall */
   }
 
   .online-choice-grid {
