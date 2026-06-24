@@ -377,7 +377,7 @@ button {
   width: 100dvw;
   height: 100dvh;
   pointer-events: none;
-  z-index: 20;
+  z-index: 10;
   touch-action: none;
 }
 
