@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
-- **Last Active**: 2026-06-23
+- **Total Sessions**: 12
+- **Last Active**: 2026-06-24
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~372 | Active |
+| `journal-1.md` | ~408 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-06-24 | 弹窗 UI 优化与移动端修复 | `db00efc`, `0d797a1`, `051b4d1`, `203ed38` | `online` |
 | 11 | 2026-06-23 | Fix online gameplay regressions | `3171d6d` | `online` |
 | 10 | 2026-06-23 | Online room invite multiplayer | `3f369f4`, `682101a` | `online` |
 | 9 | 2026-06-21 | Add Gobang effect audio | `a8ac28c` | `main` |

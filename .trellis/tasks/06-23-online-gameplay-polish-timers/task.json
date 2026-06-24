@@ -18,7 +18,10 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "06-24-mobile-bugs-fix",
+    "06-24-dialog-ui-polish"
+  ],
   "parent": null,
   "relatedFiles": [],
   "notes": "",
