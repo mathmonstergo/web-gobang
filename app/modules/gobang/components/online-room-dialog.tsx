@@ -10,6 +10,7 @@ import {
 } from "react";
 
 import { CommonModal } from "@/modules/gobang/components/common-modal";
+import { Spinner } from "@/modules/gobang/components/spinner";
 import {
   createOnlineRoom,
   parseInviteRoomCode,
@@ -328,7 +329,10 @@ export function OnlineRoomDialog({
               }}
               type="button"
             >
-              <span>{isCreatingRoom ? "创建中" : "创建房间"}</span>
+              <span>
+                {isCreatingRoom && <Spinner className="button-spinner" />}
+                {isCreatingRoom ? "创建中" : "创建房间"}
+              </span>
               <small>自动复制邀请链接</small>
             </button>
             <button
