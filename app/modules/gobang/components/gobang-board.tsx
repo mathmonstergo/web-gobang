@@ -32,6 +32,7 @@ import {
   type WaveHighlight
 } from "@/modules/gobang/types";
 import { getResetWaveCrestCount } from "@/modules/gobang/reset-physics";
+import { shouldDrawResetPhysicsStone } from "@/modules/gobang/reset-animation-visibility";
 import {
   playCatFootstepSound,
   playCatSwatSound,
@@ -1178,6 +1179,10 @@ function drawMainCanvas(input: DrawMainCanvasInput): void {
   const activeWaves: readonly CanvasWaveAnimation[] = input.wavesRef.current;
   const baseRadius: number = layout.cellSize * STONE_RADIUS_RATIO;
 
+  const activeMoveKeys = new Set<string>(
+    input.state.moves.map((move: Move) => positionKey(move))
+  );
+
   for (const move of input.state.moves) {
     const key: string = positionKey(move);
     if (input.hiddenKeysRef.current.has(key)) {
@@ -1225,7 +1230,8 @@ function drawMainCanvas(input: DrawMainCanvasInput): void {
   drawResetWaveCrests(context, input.resetWaveCrestsRef, input.timestamp);
   drawResetPhysicsStones(
     context,
-    input.resetPhysicsStonesRef.current
+    input.resetPhysicsStonesRef.current,
+    activeMoveKeys
   );
   drawCatSwatRemovals({
     context,
@@ -2435,10 +2441,18 @@ function getCollisionNormal(
 
 function drawResetPhysicsStones(
   context: CanvasRenderingContext2D,
-  stones: readonly ResetPhysicsStone[]
+  stones: readonly ResetPhysicsStone[],
+  activeMoveKeys: ReadonlySet<string>
 ): void {
   for (const stone of stones) {
-    if (!stone.isActivated || stone.alpha <= 0) {
+    if (
+      !shouldDrawResetPhysicsStone({
+        activeMoveKeys,
+        alpha: stone.alpha,
+        isActivated: stone.isActivated,
+        moveKey: stone.moveKey
+      })
+    ) {
       continue;
     }
 

@@ -180,6 +180,13 @@ For the Gobang board, keep game rules and rendering effects separated:
 - Victory replay effects must compute the origin from the final placed stone when available, then render only the five-stone window containing that origin.
 - Reset and undo removal effects should copy departing stones before state rollback, then draw those copies from an internal animation/physics queue.
 - Reset shockwave removal must not hide all board stones on click. Keep stones visible at their board intersections until the shockwave reaches each copied stone, then hide that logical stone and let the copied animation/physics stone take over.
+- Reset physics copy visibility depends on whether its source logical move is
+  still drawn. If `state.moves` still contains the copy's `moveKey`, do not
+  draw the inactive copy or the board will show duplicate stones during online
+  reset handoff. If `state.moves` no longer contains that `moveKey`, draw the
+  inactive copy so local reset does not flash an empty board between state
+  rollback and shockwave activation. Activated copies always draw until their
+  alpha fades out.
 - Reset wave visuals and physics impulses must be modeled as the same crest
   events. Do not draw extra visual-only rings inside one event; compute the
   minimum crest count from required departure impulse and schedule one matching
