@@ -19,16 +19,27 @@ export function createOnlinePlayerStatusModels(
 ): readonly OnlinePlayerStatusModel[] {
   return PLAYER_ORDER.map((color: Player): OnlinePlayerStatusModel => {
     const player = snapshot.players[color];
+    const isEmptySlot = player === undefined;
     return {
       color,
-      nickname: player?.nickname ?? (color === "black" ? "黑棋" : "白棋"),
-      avatarInitial: player?.avatarInitial ?? (color === "black" ? "黑" : "白"),
-      avatarColor: player?.avatarColor ?? "#3a342c",
+      nickname: isEmptySlot
+        ? "等待对手..."
+        : player.nickname,
+      avatarInitial: isEmptySlot
+        ? (color === "black" ? "黑" : "白")
+        : player.avatarInitial,
+      avatarColor: isEmptySlot
+        ? "#3a342c"
+        : player.avatarColor,
       isCurrentTurn:
-        snapshot.phase === "playing" && snapshot.game.currentPlayer === color,
+        !isEmptySlot &&
+        snapshot.phase === "playing" &&
+        snapshot.game.currentPlayer === color,
       isOnline:
-        player?.isConnected === true && player.isHeartbeatHealthy === true,
-      timerText: createTimerText(snapshot, color, now)
+        !isEmptySlot &&
+        player.isConnected === true &&
+        player.isHeartbeatHealthy === true,
+      timerText: isEmptySlot ? null : createTimerText(snapshot, color, now)
     };
   });
 }

@@ -370,3 +370,39 @@ Fixed online room cleanup, server notifications, authoritative board effects, re
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: 弹窗 UI 优化与移动端修复
+
+**Date**: 2026-06-24
+**Task**: 弹窗 UI 优化与移动端修复
+**Branch**: `online`
+
+### Summary
+
+完成空位显示优化、移动端布局修复、弹窗 UI 全面提升至顶级设计水平，以及开发环境 API 代理配置
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `db00efc` | (see git log) |
+| `0d797a1` | (see git log) |
+| `051b4d1` | (see git log) |
+| `203ed38` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

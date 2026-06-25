@@ -15,8 +15,8 @@ import {
 import { OnlinePlayerStatusPanel } from "@/modules/gobang/components/online-player-status-panel";
 import {
   RollingActionLabel,
-  type RollingActionLabelValue
 } from "@/modules/gobang/components/rolling-action-label";
+import { getPrimaryActionState } from "@/modules/gobang/online-action-state";
 import { primeGobangAudio } from "@/modules/gobang/audio-effects";
 import { deriveEffects } from "@/modules/gobang/effects";
 import { useGobangGame } from "@/modules/gobang/hooks/use-gobang-game";
@@ -34,6 +34,12 @@ import {
   getOnlineResetTransition,
   getOnlineUndoTransition
 } from "@/modules/gobang/online-snapshot-effects";
+import {
+  createOptimisticOnlinePlacement,
+  doesSnapshotContainOptimisticPlacement,
+  shouldUseOptimisticOnlinePlacement,
+  type OptimisticOnlinePlacement
+} from "@/modules/gobang/online-optimistic-placement";
 import { loadOnlineProfile } from "@/modules/gobang/online-storage";
 import {
   type OnlineGamePhase,
@@ -63,6 +69,8 @@ export function GobangGame(): ReactElement {
     game: GameState;
     gameNumber: number;
   } | null>(null);
+  const [optimisticOnlinePlacement, setOptimisticOnlinePlacement] =
+    useState<OptimisticOnlinePlacement | null>(null);
   const [onlineRoom, setOnlineRoom] = useState<OnlineRoomReady | null>(null);
   const [initialOnlineRoomCode, setInitialOnlineRoomCode] = useState<
     string | null
@@ -102,27 +110,59 @@ export function GobangGame(): ReactElement {
     onlineWarmupStartVisualGame ??
     null;
   const isShowingOnlineResetVisual = onlineResetVisualGame !== null;
+  const isUsingOptimisticOnlinePlacement = shouldUseOptimisticOnlinePlacement(
+    onlineSnapshot,
+    optimisticOnlinePlacement
+  );
+  const displayedOnlineGame: GameState | null =
+    onlineSnapshot === null
+      ? null
+      : isUsingOptimisticOnlinePlacement && optimisticOnlinePlacement !== null
+        ? optimisticOnlinePlacement.game
+        : onlineSnapshot.game;
   const isUsingServerBoard =
     isOnlineRoomActive &&
     onlineSnapshot !== null &&
     (isAuthoritativeOnlinePhase(onlineSnapshot.phase) ||
       isShowingOnlineResetVisual);
   const serverEffects: DerivedEffects | null = useMemo(
-    () =>
-      onlineSnapshot === null
+    () => {
+      if (onlineSnapshot === null || displayedOnlineGame === null) {
+        return null;
+      }
+
+      if (
+        isUsingOptimisticOnlinePlacement &&
+        optimisticOnlinePlacement !== null
+      ) {
+        return deriveEffects(
+          optimisticOnlinePlacement.game,
+          optimisticOnlinePlacement.placement
+        );
+      }
+
+      const placementEffect = doesSnapshotContainOptimisticPlacement(
+        onlineSnapshot,
+        optimisticOnlinePlacement
+      )
         ? null
-        : deriveEffects(
-            onlineSnapshot.game,
-            deriveOnlinePlacementEffect(
-              previousOnlineSnapshotRef.current,
-              onlineSnapshot
-            )
-          ),
-    [onlineSnapshot]
+        : deriveOnlinePlacementEffect(
+            previousOnlineSnapshotRef.current,
+            onlineSnapshot
+          );
+
+      return deriveEffects(displayedOnlineGame, placementEffect);
+    },
+    [
+      displayedOnlineGame,
+      isUsingOptimisticOnlinePlacement,
+      onlineSnapshot,
+      optimisticOnlinePlacement
+    ]
   );
   const state: GameState =
     isUsingServerBoard
-      ? onlineResetVisualGame ?? onlineSnapshot.game
+      ? onlineResetVisualGame ?? displayedOnlineGame ?? onlineSnapshot.game
       : isOnlineRoomActive
         ? warmupState
         : localGame.state;
@@ -135,7 +175,9 @@ export function GobangGame(): ReactElement {
           ? warmupGame.effects
           : localGame.effects;
   const onlinePreviewPlayer =
-    onlineSnapshot === null ? null : getOnlineBoardPreviewPlayer(onlineSnapshot);
+    onlineSnapshot === null || isUsingOptimisticOnlinePlacement
+      ? null
+      : getOnlineBoardPreviewPlayer(onlineSnapshot);
   const previewPlayer: Player | null =
     isUsingServerBoard ? onlinePreviewPlayer : state.currentPlayer;
   const isPlacementEnabled =
@@ -154,22 +196,19 @@ export function GobangGame(): ReactElement {
     incomingOnlineRequest?.type === "undo" ? "对方请求悔棋" : "对方请求认输";
   const canSendOnlineUndo =
     isUsingServerBoard && canRequestOnlineUndoAction;
-  const resetActionLabel: RollingActionLabelValue =
-    isOnlineRoomActive
-      ? onlineSnapshot?.phase === "playing"
-        ? "认输"
-        : "开始"
-      : "新局";
+  const primaryActionState = getPrimaryActionState({
+    canRequestOnlineSurrender: canRequestOnlineSurrenderAction,
+    canStart: onlineSnapshot?.canStart === true,
+    isOnlineRoomActive,
+    isResetPending,
+    isUsingServerBoard,
+    onlinePhase: onlineGamePhase
+  });
+  const resetActionLabel = primaryActionState.label;
   const isUndoDisabled =
     isResetPending ||
     (isUsingServerBoard ? !canSendOnlineUndo : state.moves.length === 0);
-  const isResetDisabled =
-    isResetPending ||
-    (isOnlineRoomActive &&
-      (onlineSnapshot === null ||
-        (onlineSnapshot.phase === "playing"
-          ? !canRequestOnlineSurrenderAction
-          : !onlineSnapshot.canStart)));
+  const isResetDisabled = primaryActionState.disabled;
   const handleReset = (): void => {
     primeGobangAudio();
 
@@ -177,12 +216,12 @@ export function GobangGame(): ReactElement {
       return;
     }
 
-    if (isOnlineRoomActive && onlineSnapshot?.phase === "playing") {
+    if (primaryActionState.intent === "surrender") {
       onlineRoomClient.requestSurrender();
       return;
     }
 
-    if (isOnlineRoomActive) {
+    if (primaryActionState.intent === "start-game") {
       onlineRoomClient.startGame();
       return;
     }
@@ -254,7 +293,14 @@ export function GobangGame(): ReactElement {
         onlineSnapshot.phase === "playing" &&
         onlineSnapshot.viewerColor === state.currentPlayer
       ) {
-        onlineRoomClient.placeAt(position);
+        const optimisticPlacement = createOptimisticOnlinePlacement(
+          onlineSnapshot,
+          position
+        );
+        const didSendPlace = onlineRoomClient.placeAt(position);
+        if (didSendPlace) {
+          setOptimisticOnlinePlacement(optimisticPlacement);
+        }
       }
       return;
     }
@@ -344,6 +390,18 @@ export function GobangGame(): ReactElement {
   }, []);
 
   useEffect(() => {
+    if (
+      optimisticOnlinePlacement !== null &&
+      !shouldUseOptimisticOnlinePlacement(
+        onlineSnapshot,
+        optimisticOnlinePlacement
+      )
+    ) {
+      setOptimisticOnlinePlacement(null);
+    }
+  }, [onlineSnapshot, optimisticOnlinePlacement]);
+
+  useEffect(() => {
     if (onlineSnapshot === null) {
       previousOnlineSnapshotRef.current = null;
       setOnlineResetVisual(null);
@@ -407,7 +465,7 @@ export function GobangGame(): ReactElement {
       previousOnlineSnapshotRef.current !== null &&
       previousOnlineSnapshotRef.current.phase !== "playing" &&
       onlineSnapshot.phase === "playing" &&
-    onlineSnapshot.game.moves.length === 0 &&
+      onlineSnapshot.game.moves.length === 0 &&
       warmupState.moves.length > 0;
     if (transition === null && shouldAnimateWarmupStart) {
       if (onlineResetTimeoutRef.current !== null) {
